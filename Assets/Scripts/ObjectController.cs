@@ -40,12 +40,12 @@ namespace DefaultNamespace
         protected ObjectControllerState _state;
 
         protected RaycastOriginInfo _raycastOrigins;
-        protected Vector2 _originalColliderSize;
-        protected Vector2 _originalColliderOffset;
-        protected bool _colliderResized;
-        // Internal state tracking
         private float _verticalDistanceBetweenRays;
         private float _horizontalDistanceBetweenRays;
+
+        protected bool _colliderResized;
+        protected Vector2 _originalColliderSize;
+        protected Vector2 _originalColliderOffset;
 
         public Vector2 Position { get; private set; }
 
@@ -97,9 +97,11 @@ namespace DefaultNamespace
             _transform = transform;
             _boxCollider = GetComponent<BoxCollider2D>();
 
+            _previousPosition = _transform.position;
             _originalColliderSize = _boxCollider.size;
             _originalColliderOffset = _boxCollider.offset;
 
+            Position = _previousPosition;
             GravityScale = gravityScale;
             GroundFriction = groundFriction;
             AirFriction = airFriction;
@@ -107,15 +109,6 @@ namespace DefaultNamespace
             _state.Reset();
             CalculateDistanceBetweenRays();
             UpdateRaycastOrigins();
-        }
-
-        protected virtual void Start()
-        {
-            _previousPosition = _transform.position;
-            Position = _previousPosition;
-            GravityScale = gravityScale;
-            GroundFriction = groundFriction;
-            AirFriction = airFriction;
         }
 
         protected virtual void FixedUpdate()
@@ -463,9 +456,12 @@ namespace DefaultNamespace
             }
         }
 
-        protected void MoveTransform()
+        protected virtual void MoveTransform()
         {
-            if (_deltaMovement.magnitude < MinimumMovementThreshold) return;
+            if (_deltaMovement.magnitude < MinimumMovementThreshold)
+            {
+                return;
+            }
 
             _previousPosition = _transform.position;
             Position = _previousPosition + _deltaMovement;
@@ -505,7 +501,7 @@ namespace DefaultNamespace
         /// Checks for collisions in the horizontal axis and adjust the speed accordingly to stop at the
         /// collided object.
         /// </summary>
-        protected void HandleHorizontalCollisions()
+        protected virtual void HandleHorizontalCollisions()
         {
             var isGoingRight = _deltaMovement.x > 0f;
             var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
@@ -550,7 +546,7 @@ namespace DefaultNamespace
         /// Checks for collisions in the vertical axis and adjust the speed accordingly to stop at the
         /// collided object.
         /// </summary>
-        protected void HandleVerticalCollisions()
+        protected virtual void HandleVerticalCollisions()
         {
             var isGoingUp = _deltaMovement.y > 0f;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
