@@ -36,6 +36,7 @@ namespace DefaultNamespace
         protected float _currentGravity;
         protected float _slowFallFactor;
         protected Vector2 _previousPosition;
+        protected Vector2 _deltaMovement;
         protected ObjectControllerState _state;
 
         protected RaycastOriginInfo _raycastOrigins;
@@ -50,7 +51,7 @@ namespace DefaultNamespace
 
         public Vector2 ForcesApplied { get; private set; }
 
-        public Vector2 Velocity { get; private set; }
+        public Vector2 Velocity { get; protected set; }
 
         public ObjectControllerState State => _state;
 
@@ -87,7 +88,7 @@ namespace DefaultNamespace
         /// </summary>
         public Collider2D StandingOnCollider { get; protected set; }
 
-        public GameObject Wall { get; protected set; }
+        public GameObject CurrentWall { get; protected set; }
 
         protected virtual float MinimumMovementThreshold => 0.01f;
 
@@ -115,8 +116,6 @@ namespace DefaultNamespace
             GravityScale = gravityScale;
             GroundFriction = groundFriction;
             AirFriction = airFriction;
-
-            CheckGrounded();
         }
 
         protected virtual void FixedUpdate()
@@ -131,9 +130,16 @@ namespace DefaultNamespace
             _state.Reset();
 
             ForcesApplied = _speed + _externalForce;
-            var deltaMovement = ForcesApplied * Time.deltaTime;
+            _deltaMovement = ForcesApplied * Time.deltaTime;
 
-            Velocity = MoveTransform(deltaMovement) / Time.deltaTime;
+            UpdateRaycastOrigins();
+            if (_deltaMovement.x != 0f) HandleHorizontalCollisions();
+            if (_deltaMovement.y != 0f) HandleVerticalCollisions();
+            MoveTransform();
+            UpdateRaycastOrigins();
+            UpdateState();
+
+            Velocity = _deltaMovement / Time.deltaTime;
             if (Velocity.magnitude < MinimumMovementThreshold)
             {
                 Velocity = Vector2.zero;
@@ -315,25 +321,6 @@ namespace DefaultNamespace
         /// </summary>
         public void WarpToGround()
         {
-            var stepCount = 0;
-            do
-            {
-                MoveTransform(Vector2.down * 100f);
-                stepCount++;
-            } while (!_state.IsGrounded && stepCount < 10);
-
-            Velocity = Vector2.zero;
-            _speed = Vector2.zero;
-            _externalForce = Vector2.zero;
-        }
-
-        /// <summary>
-        /// Tries to move according to current speed and checking for collisions.
-        /// </summary>
-        /// <param name="deltaMovement"></param>
-        public virtual void Move(Vector2 deltaMovement)
-        {
-            MoveTransform(deltaMovement);
         }
 
         /// <summary>
@@ -476,55 +463,21 @@ namespace DefaultNamespace
             }
         }
 
-        protected Vector2 MoveTransform(Vector2 deltaMovement)
+        protected void MoveTransform()
         {
-            var go = gameObject;
-            var goLayer = go.layer;
-            go.layer = Physics2D.IgnoreRaycastLayer;
+            if (_deltaMovement.magnitude < MinimumMovementThreshold) return;
 
-            UpdateRaycastOrigins();
-            PreMoveTransform(ref deltaMovement);
-            if (deltaMovement.x != 0f) HandleHorizontalCollisions(ref deltaMovement);
-            if (deltaMovement.y != 0f) HandleVerticalCollisions(ref deltaMovement);
+            _previousPosition = _transform.position;
+            Position = _previousPosition + _deltaMovement;
 
-            if (deltaMovement != Vector2.zero)
-            {
-                _previousPosition = _transform.position;
-                Position = _previousPosition + deltaMovement;
-
-                Debug.DrawRay(_previousPosition, deltaMovement * 3f, Color.green);
-                _transform.Translate(deltaMovement, Space.Self);
-                Physics2D.SyncTransforms();
-            }
-
-            PostMoveTransform();
-            go.layer = goLayer;
-            return deltaMovement;
+            Debug.DrawRay(_previousPosition, _deltaMovement * 3f, Color.green);
+            _transform.Translate(_deltaMovement, Space.Self);
+            Physics2D.SyncTransforms();
         }
 
-        protected virtual void PreMoveTransform(ref Vector2 deltaMove)
-        {
-            StandingOnLastFrame = StandingOn;
-            StandingOn = null;
-            StandingOnCollider = null;
-        }
-
-        protected virtual void PostMoveTransform()
+        protected virtual void UpdateState()
         {
             IgnoreFriction = false;
-            if ((_state.IsCollidingBelow && ForcesApplied.y < 0f) ||
-                (_state.IsCollidingAbove && ForcesApplied.y > 0f))
-            {
-                _speed.y = 0f;
-                _externalForce.y = 0f;
-            }
-
-            if ((_state.IsCollidingLeft && ForcesApplied.x < 0f) ||
-                (_state.IsCollidingRight && ForcesApplied.x > 0f))
-            {
-                // speed.x = 0f;
-                _externalForce.x = 0f;
-            }
         }
 
         /// <summary>
@@ -548,25 +501,18 @@ namespace DefaultNamespace
             return !hit ? destination : Position;
         }
 
-        protected void CheckGrounded()
-        {
-            var down = Vector2.down * 0.02f;
-            HandleVerticalCollisions(ref down);
-            _state.IsFalling = !_state.IsGrounded;
-        }
-
         /// <summary>
         /// Checks for collisions in the horizontal axis and adjust the speed accordingly to stop at the
         /// collided object.
         /// </summary>
-        /// <param name="deltaMovement">The current object deltaMove used for the raycast lenght.</param>
-        protected void HandleHorizontalCollisions(ref Vector2 deltaMovement)
+        protected void HandleHorizontalCollisions()
         {
-            var isGoingRight = deltaMovement.x > 0f;
-            var rayDistance = Mathf.Abs(deltaMovement.x) + skinWidth;
+            var isGoingRight = _deltaMovement.x > 0f;
+            var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
             var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
             var initialRayOrigin = isGoingRight ? _raycastOrigins.bottomRight : _raycastOrigins.bottomLeft;
 
+            CurrentWall = null;
             for (var i = 0; i < numberOfHorizontalRays; i++)
             {
                 var rayOrigin = initialRayOrigin;
@@ -579,13 +525,19 @@ namespace DefaultNamespace
                     continue;
                 }
 
-                var minDistance = Mathf.Min(Mathf.Abs(deltaMovement.x), raycastHit.distance - skinWidth);
-                deltaMovement.x = minDistance * rayDirection.x;
-                rayDistance = Mathf.Min(Mathf.Abs(deltaMovement.x) + skinWidth, raycastHit.distance);
+                var minDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x), raycastHit.distance - skinWidth);
+                _deltaMovement.x = minDistance * rayDirection.x;
+                rayDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x) + skinWidth, raycastHit.distance);
 
                 _state.IsCollidingLeft = !isGoingRight;
                 _state.IsCollidingRight = isGoingRight;
-                Wall = raycastHit.transform.gameObject;
+                CurrentWall = raycastHit.transform.gameObject;
+
+                _externalForce.x = 0f;
+                if (Mathf.Abs(_deltaMovement.x) < kSmallFloatValue)
+                {
+                    _deltaMovement.x = 0f;
+                }
 
                 // We add a small fudge factor for the float operations here. if our rayDistance is smaller
                 // than the width + fudge bail out because we have a direct impact
@@ -598,18 +550,17 @@ namespace DefaultNamespace
         /// Checks for collisions in the vertical axis and adjust the speed accordingly to stop at the
         /// collided object.
         /// </summary>
-        /// <param name="deltaMovement">The current object deltaMove used for the raycast lenght.</param>
-        protected void HandleVerticalCollisions(ref Vector2 deltaMovement)
+        protected void HandleVerticalCollisions()
         {
-            var isGoingUp = deltaMovement.y > 0f;
-            var rayDistance = Mathf.Abs(deltaMovement.y) + skinWidth;
+            var isGoingUp = _deltaMovement.y > 0f;
+            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var rayDirection = isGoingUp ? Vector2.up : Vector2.down;
             var initialRayOrigin = isGoingUp ? _raycastOrigins.topLeft : _raycastOrigins.bottomLeft;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
                 var rayOrigin = initialRayOrigin;
-                rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + deltaMovement.x);
+                rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
 
                 Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
                 var raycastHit = Physics2D.Raycast(rayOrigin, rayDirection, rayDistance, collisionMask);
@@ -623,7 +574,7 @@ namespace DefaultNamespace
                     continue;
                 }
 
-                deltaMovement.y = (raycastHit.distance - skinWidth) * rayDirection.y;
+                _deltaMovement.y = (raycastHit.distance - skinWidth) * rayDirection.y;
                 rayDistance = raycastHit.distance;
 
                 _state.IsCollidingAbove = isGoingUp;
@@ -633,6 +584,13 @@ namespace DefaultNamespace
                 {
                     StandingOn = raycastHit.transform.gameObject;
                     StandingOnCollider = raycastHit.collider;
+                }
+
+                _speed.y = 0f;
+                _externalForce.y = 0f;
+                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue)
+                {
+                    _deltaMovement.y = 0f;
                 }
 
                 // We add a small fudge factor for the float operations here. if our rayDistance is smaller

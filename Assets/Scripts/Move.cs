@@ -15,6 +15,22 @@ namespace DefaultNamespace
             _controller = GetComponent<ObjectController>();
         }
 
+        private void Update()
+        {
+            if (Input.GetKey(KeyCode.A))
+            {
+                _controller.SetHorizontalVelocity(-3f);
+            }
+            else if (Input.GetKey(KeyCode.D))
+            {
+                _controller.SetHorizontalVelocity(3f);
+            }
+            else
+            {
+                _controller.SetHorizontalVelocity(0f);
+            }
+        }
+
     }
 
 }
