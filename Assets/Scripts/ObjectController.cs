@@ -111,6 +111,11 @@ namespace DefaultNamespace
             UpdateRaycastOrigins();
         }
 
+        private void Start()
+        {
+            WarpToGround();
+        }
+
         protected virtual void FixedUpdate()
         {
             if (Time.timeScale == 0f)
@@ -301,19 +306,40 @@ namespace DefaultNamespace
         /// </summary>
         /// <param name="position"></param>
         /// <param name="moveToClosestPosition"></param>
-        public void TeleportTo(Vector2 position, bool moveToClosestPosition = true)
+        public virtual void TeleportTo(Vector2 position, bool moveToClosestPosition = true)
         {
+            _previousPosition = Position;
             Position = moveToClosestPosition ? GetClosestSafePosition(position) : position;
             Velocity = Vector2.zero;
-            transform.position = Position;
+            _transform.position = Position;
             Physics2D.SyncTransforms();
+
+            UpdateRaycastOrigins();
         }
 
         /// <summary>
         /// Teleports the controller to the ground.
         /// </summary>
-        public void WarpToGround()
+        public virtual void WarpToGround()
         {
+            var raycastHit = Physics2D.Raycast(
+                _raycastOrigins.bottomLeft,
+                Vector2.down,
+                100f,
+                collisionMask | oneWayPlatformMask
+            );
+
+            if (!raycastHit)
+            {
+                return;
+            }
+
+            var pos = _transform.position;
+            pos.y -= raycastHit.distance - skinWidth;
+            TeleportTo(pos, false);
+
+            _speed = Vector2.zero;
+            _externalForce = Vector2.zero;
         }
 
         /// <summary>
