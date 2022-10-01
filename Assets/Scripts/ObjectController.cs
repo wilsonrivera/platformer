@@ -5,9 +5,10 @@ namespace DefaultNamespace
 {
 
     [RequireComponent(typeof(BoxCollider2D))]
-    public class ObjectController : MonoBehaviour, IObjectController
+    public class ObjectController : MonoBehaviour
     {
 
+        private const float kSmallFloatValue = 0.0001f;
         private const float kSkinWidthFloatFudgeFactor = 0.001f;
 
         [SerializeField] private float gravityScale = 1f;
@@ -20,64 +21,102 @@ namespace DefaultNamespace
 
         [Header("Raycasting")]
         [Tooltip("A small value added to all raycasts to accomodate for edge cases")]
-        [SerializeField] [Range(0.001f, 0.1f)] private float skinWidth = 0.05f;
+        [SerializeField] [Range(0.001f, 0.1f)] private float skinWidth = 0.015f;
         [Tooltip("The number of rays cast horizontally")]
         [SerializeField] [Range(3, 20)] private int numberOfHorizontalRays = 8;
         [Tooltip("The number of rays cast vertically")]
         [SerializeField] [Range(3, 20)] private int numberOfVerticalRays = 8;
 
-        private Transform _transform;
-        private BoxCollider2D _boxCollider;
-        //
-        protected Vector2 speed;
-        protected Vector2 externalForce;
-        //
-        private Vector2 _previousPosition;
-        private CollisionStateInfo _collisionState;
-        private RaycastOriginInfo _raycastOrigins;
+        // Components
+        protected Transform _transform;
+        protected BoxCollider2D _boxCollider;
+        // State tracking
+        protected Vector2 _speed;
+        protected Vector2 _externalForce;
+        protected float _currentGravity;
+        protected float _slowFallFactor;
+        protected Vector2 _previousPosition;
+        protected ObjectControllerState _state;
+
+        protected RaycastOriginInfo _raycastOrigins;
+        protected Vector2 _originalColliderSize;
+        protected Vector2 _originalColliderOffset;
+        protected bool _colliderResized;
+        // Internal state tracking
         private float _verticalDistanceBetweenRays;
         private float _horizontalDistanceBetweenRays;
-        //
-        private float? _customGravityScale;
-        private float? _customGroundFriction;
-        private float? _customAirFriction;
 
-        /// <inheritdoc />
         public Vector2 Position { get; private set; }
 
-        /// <inheritdoc />
         public Vector2 ForcesApplied { get; private set; }
 
-        /// <inheritdoc />
         public Vector2 Velocity { get; private set; }
 
+        public ObjectControllerState State => _state;
+
+        /// <summary>
+        /// Gets the time (in seconds) since the last time the character was grounded
+        /// </summary>
+        public float TimeAirborne { get; protected set; }
+
+        /// <summary>
+        /// Is this controller affected by gravity?
+        /// </summary>
+        public bool IsGravityActive { get; protected set; } = true;
+
+        public float GravityScale { get; protected set; }
+
+        public bool IgnoreFriction { get; protected set; }
+
+        public float GroundFriction { get; protected set; }
+
+        public float AirFriction { get; protected set; }
+
+        /// <summary>
+        /// The object the controller is standing on.
+        /// </summary>
+        public GameObject StandingOn { get; protected set; }
+
+        /// <summary>
+        /// The object the controller was standing on last frame.
+        /// </summary>
+        public GameObject StandingOnLastFrame { get; protected set; }
+
+        /// <summary>
+        /// The collider the controller is standing on.
+        /// </summary>
+        public Collider2D StandingOnCollider { get; protected set; }
+
+        public GameObject Wall { get; protected set; }
+
         protected virtual float MinimumMovementThreshold => 0.01f;
-
-        protected float GravityScale => _customGravityScale ?? gravityScale;
-
-        protected bool IgnoreFriction { get; private set; }
-
-        protected float GroundFriction => _customGroundFriction ?? groundFriction;
-
-        protected float AirFriction => _customAirFriction ?? airFriction;
 
         protected virtual void Awake()
         {
             _transform = transform;
             _boxCollider = GetComponent<BoxCollider2D>();
+
+            _originalColliderSize = _boxCollider.size;
+            _originalColliderOffset = _boxCollider.offset;
+
+            GravityScale = gravityScale;
+            GroundFriction = groundFriction;
+            AirFriction = airFriction;
+
+            _state.Reset();
+            CalculateDistanceBetweenRays();
+            UpdateRaycastOrigins();
         }
 
         protected virtual void Start()
         {
             _previousPosition = _transform.position;
             Position = _previousPosition;
+            GravityScale = gravityScale;
+            GroundFriction = groundFriction;
+            AirFriction = airFriction;
 
-            CalculateDistanceBetweenRays();
-            UpdateRaycastOrigins();
-            CheckGrounded(1); // At the start we always check if the object is grounded facing right
-
-            // SetTransformPosition(new Vector2(-10f, 0f));
-            WarpToGround();
+            CheckGrounded();
         }
 
         protected virtual void FixedUpdate()
@@ -87,13 +126,23 @@ namespace DefaultNamespace
                 return;
             }
 
-            _collisionState.Reset();
             UpdateGravity();
             UpdateExternalForce();
+            _state.Reset();
 
-            ForcesApplied = speed + externalForce;
+            ForcesApplied = _speed + _externalForce;
             var deltaMovement = ForcesApplied * Time.deltaTime;
+
             Velocity = MoveTransform(deltaMovement) / Time.deltaTime;
+            if (Velocity.magnitude < MinimumMovementThreshold)
+            {
+                Velocity = Vector2.zero;
+            }
+        }
+
+        protected virtual void LateUpdate()
+        {
+            TimeAirborne = _state.IsGrounded ? 0f : TimeAirborne + Time.deltaTime;
         }
 
         protected virtual void OnDrawGizmosSelected()
@@ -119,64 +168,225 @@ namespace DefaultNamespace
             Gizmos.DrawLine(origins.bottomRight, origins.topRight);
         }
 
-        /// <inheritdoc />
-        public virtual void SetTransformPosition(Vector2 position, bool findSafePosition = true)
+        /// <summary>
+        /// Use this to set the velocity applied to the controller.
+        /// </summary>
+        /// <param name="value">The velocity to apply to the controller.</param>
+        public void SetVelocity(Vector2 value)
         {
-            Position = findSafePosition ? GetClosestSafePosition(position) : position;
+            _speed = value;
+        }
+
+        /// <summary>
+        /// Use this to set the horizontal velocity applied to the controller.
+        /// </summary>
+        /// <param name="value">The horizontal velocity to apply to the controller.</param>
+        public void SetHorizontalVelocity(float value)
+        {
+            _speed.x = value;
+        }
+
+        /// <summary>
+        /// Use this to set the vertical velocity applied to the controller.
+        /// </summary>
+        /// <param name="value">The vertical velocity to apply to the controller.</param>
+        public void SetVerticalVelocity(float value)
+        {
+            _speed.y = value;
+        }
+
+        /// <summary>
+        /// Use this to add force to the controller.
+        /// </summary>
+        /// <param name="value">The force to add to the controller.</param>
+        public void AddForce(Vector2 value)
+        {
+            _externalForce += value;
+        }
+
+        /// <summary>
+        /// Use this to add horizontal force to the controller.
+        /// </summary>
+        /// <param name="value">The horizontal force to add to the controller.</param>
+        public void AddHorizontalForce(float value)
+        {
+            _externalForce.x += value;
+        }
+
+        /// <summary>
+        /// Use this to add vertical force to the controller.
+        /// </summary>
+        /// <param name="value">The vertical force to add to the controller.</param>
+        public void AddVerticalForce(float value)
+        {
+            _externalForce.y += value;
+        }
+
+        /// <summary>
+        /// Use this to set the force applied to the controller.
+        /// </summary>
+        /// <param name="value">The force to apply to the controller.</param>
+        public void SetForce(Vector2 value)
+        {
+            _externalForce = value;
+            if (_speed.y < 0f)
+            {
+                // Reset the gravity
+                _speed.y = 0f;
+            }
+        }
+
+        /// <summary>
+        /// Use this to set the horizontal force applied to the controller.
+        /// </summary>
+        /// <param name="value">The horizontal force to apply to the controller.</param>
+        public void SetHorizontalForce(float value)
+        {
+            _externalForce.x = value;
+        }
+
+        /// <summary>
+        /// Use this to set the vertical force applied to the controller.
+        /// </summary>
+        /// <param name="value">The vertical force to apply to the controller.</param>
+        public void SetVerticalForce(float value)
+        {
+            _externalForce.y = value;
+            if (_speed.y < 0f)
+            {
+                // Reset the gravity
+                _speed.y = 0f;
+            }
+        }
+
+        /// <summary>
+        /// Slows the character's fall by the specified factor.
+        /// </summary>
+        /// <param name="factor">The factor, must be between 0 and 1.</param>
+        public virtual void SlowFall(float factor)
+        {
+            _slowFallFactor = factor == 0f ? 0f : Mathf.Clamp(factor, 0.01f, 1f);
+        }
+
+        /// <summary>
+        /// Activates or deactivates the gravity for this controller only.
+        /// </summary>
+        /// <param name="isActive">If set to <c>true</c>, activates the gravity. If set to <c>false</c>, turns it off.</param>
+        public virtual void SetGravityActive(bool isActive)
+        {
+            IsGravityActive = isActive;
+        }
+
+        public virtual void SetGravityScale(float value)
+        {
+            GravityScale = Mathf.Clamp(value, 0f, 25f);
+        }
+
+        public virtual void SetFrictionIgnored(bool ignore)
+        {
+            IgnoreFriction = ignore;
+        }
+
+        public virtual void SetGroundFriction(float value)
+        {
+            GroundFriction = value;
+        }
+
+        public virtual void SetAirFriction(float value)
+        {
+            AirFriction = value;
+        }
+
+        /// <summary>
+        /// Moves the controller's transform to the desired position.
+        /// </summary>
+        /// <param name="position"></param>
+        /// <param name="moveToClosestPosition"></param>
+        public void TeleportTo(Vector2 position, bool moveToClosestPosition = true)
+        {
+            Position = moveToClosestPosition ? GetClosestSafePosition(position) : position;
             Velocity = Vector2.zero;
             transform.position = Position;
             Physics2D.SyncTransforms();
         }
 
-        /// <inheritdoc />
-        public virtual void WarpToGround()
+        /// <summary>
+        /// Teleports the controller to the ground.
+        /// </summary>
+        public void WarpToGround()
         {
-        }
-
-        /// <inheritdoc />
-        public void AddForce(Vector2 value)
-        {
-            externalForce += value;
-        }
-
-        /// <inheritdoc />
-        public void AddHorizontalForce(float value)
-        {
-            externalForce.x += value;
-        }
-
-        /// <inheritdoc />
-        public void AddVerticalForce(float value)
-        {
-            externalForce.y += value;
-        }
-
-        /// <inheritdoc />
-        public void SetForce(Vector2 value)
-        {
-            externalForce = value;
-            if (speed.y < 0f)
+            var stepCount = 0;
+            do
             {
-                // Reset the gravity
-                speed.y = 0f;
-            }
+                MoveTransform(Vector2.down * 100f);
+                stepCount++;
+            } while (!_state.IsGrounded && stepCount < 10);
+
+            Velocity = Vector2.zero;
+            _speed = Vector2.zero;
+            _externalForce = Vector2.zero;
         }
 
-        /// <inheritdoc />
-        public void SetHorizontalForce(float value)
+        /// <summary>
+        /// Tries to move according to current speed and checking for collisions.
+        /// </summary>
+        /// <param name="deltaMovement"></param>
+        public virtual void Move(Vector2 deltaMovement)
         {
-            externalForce.x = value;
+            MoveTransform(deltaMovement);
         }
 
-        /// <inheritdoc />
-        public void SetVerticalForce(float value)
+        /// <summary>
+        /// Resizes the collider to the provided <paramref name="newSize"/>.
+        /// </summary>
+        /// <param name="newSize">The new size for the collider.</param>
+        public virtual void ResizeCollider(Vector2 newSize)
         {
-            externalForce.y = value;
-            if (speed.y < 0f)
+            var newYOffset = _originalColliderOffset.y - (_originalColliderSize.y - newSize.y) / 2f;
+
+            _boxCollider.size = newSize;
+            _boxCollider.offset = newYOffset * Vector3.up;
+            CalculateDistanceBetweenRays();
+            UpdateRaycastOrigins();
+            _colliderResized = true;
+        }
+
+        /// <summary>
+        /// Returns the collider to its initial size.
+        /// </summary>
+        public virtual void ResetColliderSize()
+        {
+            _boxCollider.size = _originalColliderSize;
+            _boxCollider.offset = _originalColliderOffset;
+            CalculateDistanceBetweenRays();
+            UpdateRaycastOrigins();
+            _colliderResized = false;
+        }
+
+        /// <summary>
+        /// Determines whether the box collider can return to the original size.
+        /// </summary>
+        /// <returns><c>true</c> if the box collider can go back to original size; otherwise, <c>false</c>.</returns>
+        public virtual bool ColliderCanGoBackToOriginalSize()
+        {
+            if (_boxCollider.size == _originalColliderSize)
             {
-                // Reset the gravity
-                speed.y = 0f;
+                // The collider is already at original size
+                return true;
             }
+
+            UpdateRaycastOrigins();
+            var up = _transform.up;
+            var headCheckDistance = _originalColliderSize.y * transform.localScale.y;
+
+            // Cast two rays above the controller to check for obstacles. If we didn't hit anything, we can go back
+            // to original size, otherwise we can't
+            var topLeft = _raycastOrigins.topLeft + (Vector2)up * kSmallFloatValue;
+            bool headCheckLeft = Physics2D.Raycast(topLeft, up, headCheckDistance, collisionMask);
+
+            var topRight = _raycastOrigins.topRight + (Vector2)up * kSmallFloatValue;
+            bool headCheckRight = Physics2D.Raycast(topRight, up, headCheckDistance, collisionMask);
+            return !headCheckLeft && !headCheckRight;
         }
 
         /// <summary>
@@ -221,8 +431,19 @@ namespace DefaultNamespace
         /// </summary>
         protected virtual void UpdateGravity()
         {
-            var g = Physics2D.gravity.y * GravityScale * Time.fixedDeltaTime;
-            speed.y += g;
+            if (!IsGravityActive || GravityScale == 0f)
+            {
+                // Either gravity is not active for this controller or the controller doesn't have any gravity scale
+                return;
+            }
+
+            _currentGravity = Physics2D.gravity.y * GravityScale * Time.fixedDeltaTime;
+            _speed.y += _currentGravity;
+            if (_slowFallFactor != 0f)
+            {
+                _speed.y *= _slowFallFactor;
+            }
+
             // if (speed.y > 0)
             // {
             //     speed.y += g;
@@ -243,22 +464,19 @@ namespace DefaultNamespace
                 return;
             }
 
-            var friction = _collisionState.isGrounded ? GroundFriction : AirFriction;
-            externalForce = Vector2.MoveTowards(
-                externalForce,
-                Vector2.zero, externalForce.magnitude * friction * Time.fixedDeltaTime
+            var friction = _state.IsGrounded ? GroundFriction : AirFriction;
+            _externalForce = Vector2.MoveTowards(
+                _externalForce,
+                Vector2.zero, _externalForce.magnitude * friction * Time.fixedDeltaTime
             );
 
-            if (externalForce.magnitude <= MinimumMovementThreshold)
+            if (_externalForce.magnitude <= MinimumMovementThreshold)
             {
-                externalForce = Vector2.zero;
+                _externalForce = Vector2.zero;
             }
         }
 
-        /// <summary>
-        /// Tries to move according to current speed and checking for collisions.
-        /// </summary>
-        protected virtual Vector2 MoveTransform(Vector2 deltaMovement)
+        protected Vector2 MoveTransform(Vector2 deltaMovement)
         {
             var go = gameObject;
             var goLayer = go.layer;
@@ -286,34 +504,27 @@ namespace DefaultNamespace
 
         protected virtual void PreMoveTransform(ref Vector2 deltaMove)
         {
-            CheckGrounded(Math.Sign(deltaMove.x));
+            StandingOnLastFrame = StandingOn;
+            StandingOn = null;
+            StandingOnCollider = null;
         }
 
         protected virtual void PostMoveTransform()
         {
             IgnoreFriction = false;
-            if (_collisionState.verticalHit)
+            if ((_state.IsCollidingBelow && ForcesApplied.y < 0f) ||
+                (_state.IsCollidingAbove && ForcesApplied.y > 0f))
             {
-                if ((_collisionState.isCollidingBelow && ForcesApplied.y < 0f) ||
-                    (_collisionState.isCollidingAbove && ForcesApplied.y > 0f))
-                {
-                    speed.y = 0f;
-                    externalForce.y = 0f;
-                }
+                _speed.y = 0f;
+                _externalForce.y = 0f;
             }
 
-            if (_collisionState.horizontalHit)
+            if ((_state.IsCollidingLeft && ForcesApplied.x < 0f) ||
+                (_state.IsCollidingRight && ForcesApplied.x > 0f))
             {
-                if ((_collisionState.isCollidingLeft && ForcesApplied.x < 0f) ||
-                    (_collisionState.isCollidingRight && ForcesApplied.x > 0f))
-                {
-                    externalForce.x = 0f;
-                }
+                // speed.x = 0f;
+                _externalForce.x = 0f;
             }
-
-            var isGrounded = _collisionState.isGrounded;
-            var wasGroundedLastFrame = _collisionState.wasGroundedLastFrame;
-            _collisionState.becameGroundedThisFrame = isGrounded && !wasGroundedLastFrame;
         }
 
         /// <summary>
@@ -337,43 +548,11 @@ namespace DefaultNamespace
             return !hit ? destination : Position;
         }
 
-        /// <summary>
-        /// Checks if character is touching the ground.
-        /// </summary>
-        /// <param name="direction">Direction the character is moving.</param>
-        protected void CheckGrounded(int direction)
+        protected void CheckGrounded()
         {
-            var isGoingRight = direction >= 0;
-            var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
-            var initialRayOrigin = isGoingRight ? _raycastOrigins.bottomLeft : _raycastOrigins.bottomRight;
-
-            for (var i = 0; i < numberOfVerticalRays; i++)
-            {
-                var rayOrigin = initialRayOrigin;
-                rayOrigin += rayDirection * (_verticalDistanceBetweenRays * i);
-                rayOrigin.y += skinWidth * 2f;
-
-                var raycastHit = Physics2D.Raycast(rayOrigin, Vector2.down, skinWidth * 4f, collisionMask);
-                if (!raycastHit) //  && ignorePlatformsTime <= 0
-                {
-                    raycastHit = Physics2D.Raycast(rayOrigin, Vector2.down, skinWidth * 4f, oneWayPlatformMask);
-                    if (raycastHit.distance <= 0f)
-                    {
-                        continue;
-                    }
-                }
-
-                if (!raycastHit)
-                {
-                    continue;
-                }
-
-                _collisionState.isGrounded = true;
-                _collisionState.isCollidingBelow = true;
-                _collisionState.verticalHit = raycastHit;
-                Debug.DrawRay(rayOrigin, Vector2.down * (skinWidth * 2f), Color.blue);
-                break;
-            }
+            var down = Vector2.down * 0.02f;
+            HandleVerticalCollisions(ref down);
+            _state.IsFalling = !_state.IsGrounded;
         }
 
         /// <summary>
@@ -381,7 +560,7 @@ namespace DefaultNamespace
         /// collided object.
         /// </summary>
         /// <param name="deltaMovement">The current object deltaMove used for the raycast lenght.</param>
-        protected virtual void HandleHorizontalCollisions(ref Vector2 deltaMovement)
+        protected void HandleHorizontalCollisions(ref Vector2 deltaMovement)
         {
             var isGoingRight = deltaMovement.x > 0f;
             var rayDistance = Mathf.Abs(deltaMovement.x) + skinWidth;
@@ -404,9 +583,9 @@ namespace DefaultNamespace
                 deltaMovement.x = minDistance * rayDirection.x;
                 rayDistance = Mathf.Min(Mathf.Abs(deltaMovement.x) + skinWidth, raycastHit.distance);
 
-                _collisionState.isCollidingLeft = !isGoingRight;
-                _collisionState.isCollidingRight = isGoingRight;
-                _collisionState.horizontalHit = raycastHit;
+                _state.IsCollidingLeft = !isGoingRight;
+                _state.IsCollidingRight = isGoingRight;
+                Wall = raycastHit.transform.gameObject;
 
                 // We add a small fudge factor for the float operations here. if our rayDistance is smaller
                 // than the width + fudge bail out because we have a direct impact
@@ -420,7 +599,7 @@ namespace DefaultNamespace
         /// collided object.
         /// </summary>
         /// <param name="deltaMovement">The current object deltaMove used for the raycast lenght.</param>
-        protected virtual void HandleVerticalCollisions(ref Vector2 deltaMovement)
+        protected void HandleVerticalCollisions(ref Vector2 deltaMovement)
         {
             var isGoingUp = deltaMovement.y > 0f;
             var rayDistance = Mathf.Abs(deltaMovement.y) + skinWidth;
@@ -434,7 +613,7 @@ namespace DefaultNamespace
 
                 Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
                 var raycastHit = Physics2D.Raycast(rayOrigin, rayDirection, rayDistance, collisionMask);
-                if (isGoingUp && !raycastHit)
+                if (!isGoingUp && !raycastHit)
                 {
                     raycastHit = Physics2D.Raycast(rayOrigin, rayDirection, rayDistance, oneWayPlatformMask);
                 }
@@ -447,20 +626,21 @@ namespace DefaultNamespace
                 deltaMovement.y = (raycastHit.distance - skinWidth) * rayDirection.y;
                 rayDistance = raycastHit.distance;
 
-                _collisionState.isCollidingAbove = isGoingUp;
-                _collisionState.isCollidingBelow = !isGoingUp;
-                _collisionState.verticalHit = raycastHit;
-                if (_collisionState.isCollidingBelow)
+                _state.IsCollidingAbove = isGoingUp;
+                _state.IsCollidingBelow = !isGoingUp;
+                _state.IsFalling = !isGoingUp && !_state.IsCollidingBelow;
+                if (!isGoingUp)
                 {
-                    // After performing the movement, this controller have has been grounded, this is just so we
-                    // don't need to wait for the next frame to flag the controller as grounded
-                    _collisionState.isGrounded = true;
+                    StandingOn = raycastHit.transform.gameObject;
+                    StandingOnCollider = raycastHit.collider;
                 }
 
                 // We add a small fudge factor for the float operations here. if our rayDistance is smaller
                 // than the width + fudge bail out because we have a direct impact
                 if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
+                {
                     break;
+                }
             }
         }
 
@@ -474,34 +654,89 @@ namespace DefaultNamespace
 
         }
 
-        [Serializable] protected struct CollisionStateInfo
+        [Serializable] public struct ObjectControllerState
         {
 
-            public bool isGrounded;
-            public bool wasGroundedLastFrame;
-            public bool becameGroundedThisFrame;
+            /// <summary>
+            /// Is the controller colliding with something below it?
+            /// </summary>
+            public bool IsCollidingBelow { get; set; }
 
-            public RaycastHit2D verticalHit;
-            public RaycastHit2D horizontalHit;
+            /// <summary>
+            /// Is the controller colliding with something above it?
+            /// </summary>
+            public bool IsCollidingAbove { get; set; }
 
-            public bool isCollidingBelow;
-            public bool isCollidingAbove;
-            public bool isCollidingLeft;
-            public bool isCollidingRight;
+            /// <summary>
+            /// Is the controller colliding with something to the left?
+            /// </summary>
+            public bool IsCollidingLeft { get; set; }
+
+            /// <summary>
+            /// Is the controller colliding with something to the right?
+            /// </summary>
+            public bool IsCollidingRight { get; set; }
+
+            /// <summary>
+            /// Is the controller colliding with anything?
+            /// </summary>
+            public bool HasCollision => IsCollidingBelow || IsCollidingAbove || IsCollidingLeft || IsCollidingRight;
+
+            /// <summary>
+            /// Is the controller grounded?
+            /// </summary>
+            public bool IsGrounded => IsCollidingBelow;
+
+            /// <summary>
+            /// Was the controller grounded last frame?
+            /// </summary>
+            public bool WasGroundedLastFrame { get; private set; }
+
+            /// <summary>
+            /// Did the controller just become grounded?
+            /// </summary>
+            public bool JustGotGrounded => IsGrounded && !WasGroundedLastFrame;
+
+            /// <summary>
+            /// Is the controller ceilinged?
+            /// </summary>
+            public bool IsCeilinged => IsCollidingAbove;
+
+            /// <summary>
+            /// Was the controller ceilinged last frame?
+            /// </summary>
+            public bool WasCeilingedLastFrame { get; private set; }
+
+            /// <summary>
+            /// Did the controller just become ceilinged?
+            /// </summary>
+            public bool JustGotCeilinged => IsCeilinged && !WasCeilingedLastFrame;
+
+            /// <summary>
+            /// Is the controller falling?
+            /// </summary>
+            public bool IsFalling { get; set; }
+
+            /// <summary>
+            /// Was the controller falling last frame?
+            /// </summary>
+            public bool WasFallingLastFrame { get; private set; }
+
+            /// <summary>
+            /// Did the controller just started falling?
+            /// </summary>
+            public bool JustStartedFalling => IsFalling && !WasFallingLastFrame;
 
             public void Reset()
             {
-                wasGroundedLastFrame = isGrounded;
-                isGrounded = false;
-                becameGroundedThisFrame = false;
-
-                verticalHit = default;
-                horizontalHit = default;
-
-                isCollidingBelow = false;
-                isCollidingAbove = false;
-                isCollidingLeft = false;
-                isCollidingRight = false;
+                WasGroundedLastFrame = IsGrounded;
+                WasCeilingedLastFrame = IsCeilinged;
+                WasFallingLastFrame = IsFalling;
+                IsFalling = true;
+                IsCollidingBelow = false;
+                IsCollidingAbove = false;
+                IsCollidingLeft = false;
+                IsCollidingRight = false;
             }
 
         }

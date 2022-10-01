@@ -32,7 +32,7 @@ TagManager:
   - 
   - 
   - Platform
-  - Moving Platform
+  - OneWayPlatform
   - StaticTerrain
   - 
   - 
