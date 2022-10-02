@@ -10,6 +10,8 @@ namespace DefaultNamespace
 
         private const float kSmallFloatValue = 0.0001f;
         private const float kSkinWidthFloatFudgeFactor = 0.001f;
+        private const float kMinimumMagnitude = 0.001f;
+        private const float kMovementDirectionThreshold = 0.0001f;
 
         [SerializeField] private float gravityScale = 1f;
         [SerializeField] private float groundFriction = 30f;
@@ -35,24 +37,26 @@ namespace DefaultNamespace
         protected Vector2 _externalForce;
         protected float _currentGravity;
         protected float _slowFallFactor;
-        protected Vector2 _previousPosition;
-        protected Vector2 _deltaMovement;
-        protected ObjectControllerState _state;
         protected RaycastOriginInfo _raycastOrigins;
+        protected ObjectControllerState _state;
 
         protected bool _colliderResized;
         protected Vector2 _originalColliderSize;
         protected Vector2 _originalColliderOffset;
 
+        protected Vector2 _deltaMovement;
+        protected Vector2 _previousPosition;
+
+        private float _storedMovementDirection;
         private float _verticalDistanceBetweenRays;
         private float _horizontalDistanceBetweenRays;
         private readonly RaycastHit2D[] _sideHitsBuffer = new RaycastHit2D[4];
         private readonly RaycastHit2D[] _belowHitsBuffer = new RaycastHit2D[4];
         private readonly RaycastHit2D[] _aboveHitsBuffer = new RaycastHit2D[4];
 
-        public Vector2 Position { get; private set; }
+        public Vector2 Position { get; protected set; }
 
-        public Vector2 ForcesApplied { get; private set; }
+        public Vector2 ForcesApplied { get; protected set; }
 
         public Vector2 Velocity { get; protected set; }
 
@@ -92,8 +96,6 @@ namespace DefaultNamespace
         public Collider2D StandingOnCollider { get; protected set; }
 
         public GameObject CurrentWall { get; protected set; }
-
-        protected virtual float MinimumMovementThreshold => 0.01f;
 
         protected virtual void Awake()
         {
@@ -173,7 +175,7 @@ namespace DefaultNamespace
         /// Use this to set the velocity applied to the controller.
         /// </summary>
         /// <param name="value">The velocity to apply to the controller.</param>
-        public void SetVelocity(Vector2 value)
+        public virtual void SetVelocity(Vector2 value)
         {
             _speed = value;
         }
@@ -182,7 +184,7 @@ namespace DefaultNamespace
         /// Use this to set the horizontal velocity applied to the controller.
         /// </summary>
         /// <param name="value">The horizontal velocity to apply to the controller.</param>
-        public void SetHorizontalVelocity(float value)
+        public virtual void SetHorizontalVelocity(float value)
         {
             _speed.x = value;
         }
@@ -191,7 +193,7 @@ namespace DefaultNamespace
         /// Use this to set the vertical velocity applied to the controller.
         /// </summary>
         /// <param name="value">The vertical velocity to apply to the controller.</param>
-        public void SetVerticalVelocity(float value)
+        public virtual void SetVerticalVelocity(float value)
         {
             _speed.y = value;
         }
@@ -200,7 +202,7 @@ namespace DefaultNamespace
         /// Use this to add force to the controller.
         /// </summary>
         /// <param name="value">The force to add to the controller.</param>
-        public void AddForce(Vector2 value)
+        public virtual void AddForce(Vector2 value)
         {
             _externalForce += value;
         }
@@ -209,7 +211,7 @@ namespace DefaultNamespace
         /// Use this to add horizontal force to the controller.
         /// </summary>
         /// <param name="value">The horizontal force to add to the controller.</param>
-        public void AddHorizontalForce(float value)
+        public virtual void AddHorizontalForce(float value)
         {
             _externalForce.x += value;
         }
@@ -218,7 +220,7 @@ namespace DefaultNamespace
         /// Use this to add vertical force to the controller.
         /// </summary>
         /// <param name="value">The vertical force to add to the controller.</param>
-        public void AddVerticalForce(float value)
+        public virtual void AddVerticalForce(float value)
         {
             _externalForce.y += value;
         }
@@ -227,7 +229,7 @@ namespace DefaultNamespace
         /// Use this to set the force applied to the controller.
         /// </summary>
         /// <param name="value">The force to apply to the controller.</param>
-        public void SetForce(Vector2 value)
+        public virtual void SetForce(Vector2 value)
         {
             _externalForce = value;
             if (_speed.y < 0f)
@@ -241,7 +243,7 @@ namespace DefaultNamespace
         /// Use this to set the horizontal force applied to the controller.
         /// </summary>
         /// <param name="value">The horizontal force to apply to the controller.</param>
-        public void SetHorizontalForce(float value)
+        public virtual void SetHorizontalForce(float value)
         {
             _externalForce.x = value;
         }
@@ -250,7 +252,7 @@ namespace DefaultNamespace
         /// Use this to set the vertical force applied to the controller.
         /// </summary>
         /// <param name="value">The vertical force to apply to the controller.</param>
-        public void SetVerticalForce(float value)
+        public virtual void SetVerticalForce(float value)
         {
             _externalForce.y = value;
             if (_speed.y < 0f)
@@ -319,20 +321,35 @@ namespace DefaultNamespace
         /// </summary>
         public virtual void WarpToGround()
         {
-            var raycastHit = Physics2D.Raycast(
-                _raycastOrigins.bottomLeft,
-                Vector2.down,
-                100f,
-                collisionMask | oneWayPlatformMask
-            );
+            UpdateRaycastOrigins();
 
-            if (!raycastHit)
+            var smallestDistance = float.MaxValue;
+            RaycastHit2D closestRaycastHit = default;
+            for (var i = 0; i < numberOfVerticalRays; i++)
+            {
+                var raycastHit = Physics2D.Raycast(
+                    _raycastOrigins.bottomLeft,
+                    Vector2.down,
+                    100f,
+                    collisionMask | oneWayPlatformMask
+                );
+
+                if (!raycastHit || raycastHit.distance >= smallestDistance)
+                {
+                    continue;
+                }
+
+                smallestDistance = raycastHit.distance;
+                closestRaycastHit = raycastHit;
+            }
+
+            if (!closestRaycastHit)
             {
                 return;
             }
 
             var pos = _transform.position;
-            pos.y -= raycastHit.distance - skinWidth;
+            pos.y -= closestRaycastHit.distance - skinWidth;
             TeleportTo(pos, false);
 
             _speed = Vector2.zero;
@@ -473,7 +490,7 @@ namespace DefaultNamespace
                 Vector2.zero, _externalForce.magnitude * friction * Time.fixedDeltaTime
             );
 
-            if (_externalForce.magnitude <= MinimumMovementThreshold)
+            if (_externalForce.magnitude <= kMinimumMagnitude)
             {
                 _externalForce = Vector2.zero;
             }
@@ -502,7 +519,7 @@ namespace DefaultNamespace
         protected virtual void UpdateCurrentVelocity()
         {
             Velocity = _deltaMovement / Time.deltaTime;
-            if (Velocity.magnitude < MinimumMovementThreshold)
+            if (Velocity.magnitude < kMinimumMagnitude)
             {
                 Velocity = Vector2.zero;
             }
@@ -544,14 +561,37 @@ namespace DefaultNamespace
             return !hit ? destination : Position;
         }
 
-        protected virtual void HandleCollisionsToTheSide()
+        /// <summary>
+        /// Determines the current movement direction.
+        /// </summary>
+        protected virtual float GetMovementDirection()
         {
-            if (_deltaMovement.x == 0f)
+            var movementDirection = _storedMovementDirection;
+            if (_speed.x < -kMovementDirectionThreshold)
             {
-                return;
+                movementDirection = -1;
+            }
+            else if (_speed.x > kMovementDirectionThreshold)
+            {
+                movementDirection = 1;
+            }
+            else if (_externalForce.x < -kMovementDirectionThreshold)
+            {
+                movementDirection = -1;
+            }
+            else if (_externalForce.x > kMovementDirectionThreshold)
+            {
+                movementDirection = 1;
             }
 
-            var isGoingRight = _deltaMovement.x > 0f;
+            _storedMovementDirection = movementDirection;
+            return movementDirection;
+        }
+
+        protected virtual void HandleCollisionsToTheSide()
+        {
+            var movementDirection = GetMovementDirection();
+            var isGoingRight = movementDirection > 0f;
             var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
             var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
             var initialRayOrigin = isGoingRight ? _raycastOrigins.bottomRight : _raycastOrigins.bottomLeft;
@@ -564,6 +604,7 @@ namespace DefaultNamespace
             {
                 var rayOrigin = initialRayOrigin;
                 rayOrigin += Vector2.up * (_horizontalDistanceBetweenRays * i);
+
                 Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
                 var raycastHitCount = Physics2D.RaycastNonAlloc(
                     rayOrigin,
@@ -627,117 +668,35 @@ namespace DefaultNamespace
                 return;
             }
 
-            var isGoingDown = _deltaMovement.y < 0f;
-            var closestRaycastHit = GetClosestSurface(RaycastDirection.Down, collisionMask | oneWayPlatformMask);
-            if (!closestRaycastHit)
-            {
-                return;
-            }
-
-            StandingOn = closestRaycastHit.GameObject;
-            StandingOnCollider = closestRaycastHit.Collider;
-            _state.IsCollidingBelow = true;
-            _state.IsFalling = false;
-
-            if (isGoingDown)
-            {
-                _deltaMovement.y = -closestRaycastHit.Distance + skinWidth;
-                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
-            }
-        }
-
-        protected virtual void HandleCollisionsAbove()
-        {
-            var isGoingUp = _deltaMovement.y > 0f;
-
-            var closestRaycastHit = GetClosestSurface(RaycastDirection.Up, collisionMask);
-            if (!closestRaycastHit)
-            {
-                return;
-            }
-
-            _state.IsCollidingAbove = true;
-            if (isGoingUp)
-            {
-                _deltaMovement.y = closestRaycastHit.Distance - skinWidth;
-                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
-            }
-        }
-
-        protected CollisionSurfaceInfo GetClosestSurface(RaycastDirection direction, int layerMask)
-        {
-            var rayDirection = ToNormalizedVector(direction);
-            var rayDistance = direction is RaycastDirection.Up or RaycastDirection.Down
-                ? Mathf.Abs(_deltaMovement.y) + skinWidth
-                : Mathf.Abs(_deltaMovement.x) + skinWidth;
-
-            int numberOfRays;
-            Vector2 initialRayOrigin;
-            RaycastHit2D[] resultsArray;
-            switch (direction)
-            {
-                case RaycastDirection.Up:
-                    numberOfRays = numberOfVerticalRays;
-                    initialRayOrigin = _raycastOrigins.topLeft;
-                    resultsArray = _aboveHitsBuffer;
-                    break;
-                case RaycastDirection.Down:
-                    numberOfRays = numberOfVerticalRays;
-                    initialRayOrigin = _raycastOrigins.bottomLeft;
-                    resultsArray = _belowHitsBuffer;
-                    break;
-                case RaycastDirection.Left:
-                    numberOfRays = numberOfHorizontalRays;
-                    initialRayOrigin = _raycastOrigins.bottomLeft;
-                    resultsArray = _sideHitsBuffer;
-                    break;
-                case RaycastDirection.Right:
-                    numberOfRays = numberOfHorizontalRays;
-                    initialRayOrigin = _raycastOrigins.bottomRight;
-                    resultsArray = _sideHitsBuffer;
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(direction), direction, null);
-            }
-
+            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
-            for (var i = 0; i < numberOfRays; i++)
-            {
-                var rayOrigin = initialRayOrigin;
-                switch (direction)
-                {
-                    case RaycastDirection.Up or RaycastDirection.Down:
-                        rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
-                        break;
-                    case RaycastDirection.Left or RaycastDirection.Right:
-                        rayOrigin += Vector2.up * (_horizontalDistanceBetweenRays * i);
-                        break;
-                }
 
-                Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
+            for (var i = 0; i < numberOfVerticalRays; i++)
+            {
+                var rayOrigin = _raycastOrigins.bottomLeft;
+                rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
+
+                Debug.DrawRay(rayOrigin, Vector2.down * rayDistance, Color.red);
                 var raycastHitCount = Physics2D.RaycastNonAlloc(
                     rayOrigin,
-                    rayDirection,
-                    resultsArray,
+                    Vector2.down,
+                    _belowHitsBuffer,
                     rayDistance,
-                    layerMask
+                    collisionMask | oneWayPlatformMask
                 );
 
                 if (raycastHitCount == 0) continue;
                 for (var x = 0; x < raycastHitCount; x++)
                 {
-                    var raycastHit = resultsArray[x];
+                    var raycastHit = _belowHitsBuffer[x];
                     if (raycastHit.distance >= smallestHitDistance)
                     {
                         continue;
                     }
 
-                    rayDistance = direction is RaycastDirection.Left or RaycastDirection.Right
-                        ? Mathf.Min(Mathf.Abs(_deltaMovement.x) + skinWidth, raycastHit.distance)
-                        : raycastHit.distance;
-
-                    smallestHitDistance = rayDistance;
+                    rayDistance = raycastHit.distance;
+                    smallestHitDistance = raycastHit.distance;
                     closestRaycastHit = raycastHit;
 
                     // We add a small fudge factor for the float operations here. if our rayDistance is smaller
@@ -749,29 +708,77 @@ namespace DefaultNamespace
                 }
             }
 
-            return closestRaycastHit
-                ? new CollisionSurfaceInfo(closestRaycastHit, rayDirection)
-                : default;
+            if (!closestRaycastHit)
+            {
+                return;
+            }
+
+            StandingOn = closestRaycastHit.transform.gameObject;
+            StandingOnCollider = closestRaycastHit.collider;
+            _state.IsCollidingBelow = true;
+            _state.IsFalling = false;
+
+            if (_deltaMovement.y < 0f)
+            {
+                _deltaMovement.y = -closestRaycastHit.distance + skinWidth;
+                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
+            }
         }
 
-        private static Vector2 ToNormalizedVector(RaycastDirection direction)
-            => direction switch
-            {
-                RaycastDirection.Up    => Vector2.up,
-                RaycastDirection.Down  => Vector2.down,
-                RaycastDirection.Left  => Vector2.left,
-                RaycastDirection.Right => Vector2.right,
-                _                      => throw new ArgumentOutOfRangeException(nameof(direction), direction, null)
-            };
-
-        protected enum RaycastDirection : byte
+        protected virtual void HandleCollisionsAbove()
         {
 
-            Up,
-            Down,
-            Left,
-            Right,
+            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
+            var smallestHitDistance = float.MaxValue;
+            RaycastHit2D closestRaycastHit = default;
 
+            for (var i = 0; i < numberOfVerticalRays; i++)
+            {
+                var rayOrigin = _raycastOrigins.topLeft;
+                rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
+
+                Debug.DrawRay(rayOrigin, Vector2.up * rayDistance, Color.red);
+                var raycastHitCount = Physics2D.RaycastNonAlloc(
+                    rayOrigin,
+                    Vector2.up,
+                    _aboveHitsBuffer,
+                    rayDistance,
+                    collisionMask
+                );
+
+                if (raycastHitCount == 0) continue;
+                for (var x = 0; x < raycastHitCount; x++)
+                {
+                    var raycastHit = _aboveHitsBuffer[x];
+                    if (raycastHit.distance >= smallestHitDistance)
+                    {
+                        continue;
+                    }
+
+                    rayDistance = raycastHit.distance;
+                    smallestHitDistance = raycastHit.distance;
+                    closestRaycastHit = raycastHit;
+
+                    // We add a small fudge factor for the float operations here. if our rayDistance is smaller
+                    // than the width + fudge bail out because we have a direct impact
+                    if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!closestRaycastHit)
+            {
+                return;
+            }
+
+            _state.IsCollidingAbove = true;
+            if (_deltaMovement.y > 0f)
+            {
+                _deltaMovement.y = closestRaycastHit.distance - skinWidth;
+                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
+            }
         }
 
         [Serializable] protected struct RaycastOriginInfo
@@ -868,35 +875,6 @@ namespace DefaultNamespace
                 IsCollidingLeft = false;
                 IsCollidingRight = false;
             }
-
-        }
-
-        protected readonly struct CollisionSurfaceInfo
-        {
-
-            public CollisionSurfaceInfo(RaycastHit2D hit, Vector2 direction)
-            {
-                Point = hit.point;
-                Normal = hit.normal;
-                Direction = direction;
-                Distance = hit.distance;
-                GameObject = hit.transform.gameObject;
-                Collider = hit.collider;
-            }
-
-            public Vector2 Point { get; }
-
-            public Vector2 Normal { get; }
-
-            public Vector2 Direction { get; }
-
-            public float Distance { get; }
-
-            public GameObject GameObject { get; }
-
-            public Collider2D Collider { get; }
-
-            public static implicit operator bool(CollisionSurfaceInfo _) => _.Collider;
 
         }
 
