@@ -45,7 +45,7 @@ namespace DefaultNamespace
         protected Vector2 _originalColliderOffset;
 
         protected Vector2 _deltaMovement;
-        protected Vector2 _previousPosition;
+        protected float _movementDirection;
 
         private float _storedMovementDirection;
         private float _verticalDistanceBetweenRays;
@@ -54,7 +54,7 @@ namespace DefaultNamespace
         private readonly RaycastHit2D[] _belowHitsBuffer = new RaycastHit2D[4];
         private readonly RaycastHit2D[] _aboveHitsBuffer = new RaycastHit2D[4];
 
-        public Vector2 Position { get; protected set; }
+        public Vector2 Position => _transform.position;
 
         public Vector2 ForcesApplied { get; protected set; }
 
@@ -102,11 +102,9 @@ namespace DefaultNamespace
             _transform = transform;
             _boxCollider = GetComponent<BoxCollider2D>();
 
-            _previousPosition = _transform.position;
             _originalColliderSize = _boxCollider.size;
             _originalColliderOffset = _boxCollider.offset;
 
-            Position = _previousPosition;
             GravityScale = gravityScale;
             GroundFriction = groundFriction;
             AirFriction = airFriction;
@@ -123,12 +121,8 @@ namespace DefaultNamespace
                 return;
             }
 
-            UpdateGravity();
-            _state.Reset();
-
-            ForcesApplied = _speed + _externalForce;
-            _deltaMovement = ForcesApplied * Time.deltaTime;
-
+            OnFrameEnter();
+            DetermineMovementDirection();
             UpdateRaycastOrigins();
             HandleCollisionsToTheSide();
             HandleCollisionsBelow();
@@ -139,8 +133,7 @@ namespace DefaultNamespace
             UpdateRaycastOrigins();
             UpdateExternalForce();
             UpdateState();
-            UpdateCurrentVelocity();
-            UpdateSpeedAndExternalForce();
+            OnFrameExit();
         }
 
         protected virtual void LateUpdate()
@@ -307,12 +300,16 @@ namespace DefaultNamespace
         /// <param name="moveToClosestPosition"></param>
         public virtual void TeleportTo(Vector2 position, bool moveToClosestPosition = true)
         {
-            _previousPosition = Position;
-            Position = moveToClosestPosition ? GetClosestSafePosition(position) : position;
-            Velocity = Vector2.zero;
-            _transform.position = Position;
+            var nextPosition = moveToClosestPosition ? GetClosestSafePosition(position) : position;
+            if (Position == nextPosition)
+            {
+                return;
+            }
+
+            _transform.position = nextPosition;
             Physics2D.SyncTransforms();
 
+            Velocity = Vector2.zero;
             UpdateRaycastOrigins();
         }
 
@@ -503,10 +500,7 @@ namespace DefaultNamespace
                 return;
             }
 
-            _previousPosition = _transform.position;
-            Position = _previousPosition + _deltaMovement;
-
-            Debug.DrawRay(_previousPosition, _deltaMovement * 3f, Color.green);
+            Debug.DrawRay(Position, _deltaMovement * 3f, Color.green);
             _transform.Translate(_deltaMovement, Space.Self);
             Physics2D.SyncTransforms();
         }
@@ -516,17 +510,23 @@ namespace DefaultNamespace
             IgnoreFriction = false;
         }
 
-        protected virtual void UpdateCurrentVelocity()
+        protected virtual void OnFrameEnter()
+        {
+            UpdateGravity();
+            _state.Reset();
+
+            ForcesApplied = _speed + _externalForce;
+            _deltaMovement = ForcesApplied * Time.deltaTime;
+        }
+
+        protected virtual void OnFrameExit()
         {
             Velocity = _deltaMovement / Time.deltaTime;
             if (Velocity.magnitude < kMinimumMagnitude)
             {
                 Velocity = Vector2.zero;
             }
-        }
 
-        protected virtual void UpdateSpeedAndExternalForce()
-        {
             if ((_state.IsCollidingBelow && ForcesApplied.y < 0f) ||
                 (_state.IsCollidingAbove && ForcesApplied.y > 0f))
             {
@@ -534,8 +534,10 @@ namespace DefaultNamespace
                 _externalForce.y = 0f;
             }
 
-            if (_state.IsCollidingLeft || _state.IsCollidingRight)
+            if (_state.IsCollidingLeft && _state.IsCollidingRight &&
+                Math.Sign(_deltaMovement.x) == Math.Sign(_movementDirection))
             {
+                _speed.x = 0f;
                 _externalForce.x = 0f;
             }
         }
@@ -564,39 +566,43 @@ namespace DefaultNamespace
         /// <summary>
         /// Determines the current movement direction.
         /// </summary>
-        protected virtual float GetMovementDirection()
+        protected virtual void DetermineMovementDirection()
         {
-            var movementDirection = _storedMovementDirection;
+            _movementDirection = _storedMovementDirection;
             if (_speed.x < -kMovementDirectionThreshold)
             {
-                movementDirection = -1;
+                _movementDirection = -1;
             }
             else if (_speed.x > kMovementDirectionThreshold)
             {
-                movementDirection = 1;
+                _movementDirection = 1;
             }
             else if (_externalForce.x < -kMovementDirectionThreshold)
             {
-                movementDirection = -1;
+                _movementDirection = -1;
             }
             else if (_externalForce.x > kMovementDirectionThreshold)
             {
-                movementDirection = 1;
+                _movementDirection = 1;
             }
 
-            _storedMovementDirection = movementDirection;
-            return movementDirection;
+            _storedMovementDirection = _movementDirection;
         }
 
         protected virtual void HandleCollisionsToTheSide()
         {
-            var movementDirection = GetMovementDirection();
-            var isGoingRight = movementDirection > 0f;
+            var isGoingRight = _movementDirection > 0f;
             var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
             var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
             var initialRayOrigin = isGoingRight ? _raycastOrigins.bottomRight : _raycastOrigins.bottomLeft;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
+
+            if (_deltaMovement.x == 0f)
+            {
+                // Compensate by multiplying the distance by 2 when we are not moving at all
+                rayDistance *= 2f;
+            }
 
             CurrentWall = null;
 
@@ -626,13 +632,13 @@ namespace DefaultNamespace
                     rayDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x) + skinWidth, raycastHit.distance);
                     smallestHitDistance = raycastHit.distance;
                     closestRaycastHit = raycastHit;
+                }
 
-                    // We add a small fudge factor for the float operations here. if our rayDistance is smaller
-                    // than the width + fudge bail out because we have a direct impact
-                    if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
-                    {
-                        break;
-                    }
+                // We add a small fudge factor for the float operations here. if our rayDistance is smaller
+                // than the width + fudge bail out because we have a direct impact
+                if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
+                {
+                    break;
                 }
             }
 
@@ -647,8 +653,6 @@ namespace DefaultNamespace
             _state.IsCollidingLeft = !isGoingRight;
             _state.IsCollidingRight = isGoingRight;
             CurrentWall = closestRaycastHit.transform.gameObject;
-
-            _externalForce.x = 0f;
             if (Mathf.Abs(_deltaMovement.x) < kSmallFloatValue)
             {
                 _deltaMovement.x = 0f;
@@ -668,6 +672,7 @@ namespace DefaultNamespace
                 return;
             }
 
+            var isGoingDown = _deltaMovement.y < 0f;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
@@ -698,13 +703,13 @@ namespace DefaultNamespace
                     rayDistance = raycastHit.distance;
                     smallestHitDistance = raycastHit.distance;
                     closestRaycastHit = raycastHit;
+                }
 
-                    // We add a small fudge factor for the float operations here. if our rayDistance is smaller
-                    // than the width + fudge bail out because we have a direct impact
-                    if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
-                    {
-                        break;
-                    }
+                // We add a small fudge factor for the float operations here. if our rayDistance is smaller
+                // than the width + fudge bail out because we have a direct impact
+                if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
+                {
+                    break;
                 }
             }
 
@@ -718,7 +723,7 @@ namespace DefaultNamespace
             _state.IsCollidingBelow = true;
             _state.IsFalling = false;
 
-            if (_deltaMovement.y < 0f)
+            if (isGoingDown)
             {
                 _deltaMovement.y = -closestRaycastHit.distance + skinWidth;
                 if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
@@ -727,7 +732,7 @@ namespace DefaultNamespace
 
         protected virtual void HandleCollisionsAbove()
         {
-
+            var isGoingUp = _deltaMovement.y > 0f;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
@@ -758,13 +763,13 @@ namespace DefaultNamespace
                     rayDistance = raycastHit.distance;
                     smallestHitDistance = raycastHit.distance;
                     closestRaycastHit = raycastHit;
+                }
 
-                    // We add a small fudge factor for the float operations here. if our rayDistance is smaller
-                    // than the width + fudge bail out because we have a direct impact
-                    if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
-                    {
-                        break;
-                    }
+                // We add a small fudge factor for the float operations here. if our rayDistance is smaller
+                // than the width + fudge bail out because we have a direct impact
+                if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
+                {
+                    break;
                 }
             }
 
@@ -774,7 +779,7 @@ namespace DefaultNamespace
             }
 
             _state.IsCollidingAbove = true;
-            if (_deltaMovement.y > 0f)
+            if (isGoingUp)
             {
                 _deltaMovement.y = closestRaycastHit.distance - skinWidth;
                 if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
