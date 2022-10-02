@@ -47,6 +47,10 @@ namespace DefaultNamespace
         protected Vector2 _originalColliderSize;
         protected Vector2 _originalColliderOffset;
 
+        private readonly RaycastHit2D[] _sideHitsBuffer = new RaycastHit2D[4];
+        private readonly RaycastHit2D[] _belowHitsBuffer = new RaycastHit2D[4];
+        private readonly RaycastHit2D[] _aboveHitsBuffer = new RaycastHit2D[4];
+
         public Vector2 Position { get; private set; }
 
         public Vector2 ForcesApplied { get; private set; }
@@ -111,11 +115,6 @@ namespace DefaultNamespace
             UpdateRaycastOrigins();
         }
 
-        private void Start()
-        {
-            WarpToGround();
-        }
-
         protected virtual void FixedUpdate()
         {
             if (Time.timeScale == 0f)
@@ -130,9 +129,12 @@ namespace DefaultNamespace
             _deltaMovement = ForcesApplied * Time.deltaTime;
 
             UpdateRaycastOrigins();
-            if (_deltaMovement.x != 0f) HandleHorizontalCollisions();
-            if (_deltaMovement.y != 0f) HandleVerticalCollisions();
+            HandleCollisionsToTheSide();
+            HandleCollisionsBelow();
+            HandleCollisionsAbove();
+
             MoveTransform();
+
             UpdateRaycastOrigins();
             UpdateExternalForce();
             UpdateState();
@@ -523,110 +525,189 @@ namespace DefaultNamespace
             return !hit ? destination : Position;
         }
 
-        /// <summary>
-        /// Checks for collisions in the horizontal axis and adjust the speed accordingly to stop at the
-        /// collided object.
-        /// </summary>
-        protected virtual void HandleHorizontalCollisions()
+        protected virtual void HandleCollisionsToTheSide()
         {
             var isGoingRight = _deltaMovement.x > 0f;
-            var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
-            var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
-            var initialRayOrigin = isGoingRight ? _raycastOrigins.bottomRight : _raycastOrigins.bottomLeft;
 
             CurrentWall = null;
-            for (var i = 0; i < numberOfHorizontalRays; i++)
+
+            var closestRaycastHit = GetClosestSurface(isGoingRight ? RaycastDirection.Right : RaycastDirection.Left);
+            if (!closestRaycastHit)
             {
-                var rayOrigin = initialRayOrigin;
-                rayOrigin += Vector2.up * (_horizontalDistanceBetweenRays * i);
+                return;
+            }
 
-                Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
-                var raycastHit = Physics2D.Raycast(rayOrigin, rayDirection, rayDistance, collisionMask);
-                if (!raycastHit)
-                {
-                    continue;
-                }
+            var minDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x), closestRaycastHit.Distance - skinWidth);
+            _deltaMovement.x = minDistance * closestRaycastHit.Direction.x;
 
-                var minDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x), raycastHit.distance - skinWidth);
-                _deltaMovement.x = minDistance * rayDirection.x;
-                rayDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x) + skinWidth, raycastHit.distance);
+            _state.IsCollidingLeft = !isGoingRight;
+            _state.IsCollidingRight = isGoingRight;
+            CurrentWall = closestRaycastHit.GameObject;
 
-                _state.IsCollidingLeft = !isGoingRight;
-                _state.IsCollidingRight = isGoingRight;
-                CurrentWall = raycastHit.transform.gameObject;
-
-                _externalForce.x = 0f;
-                if (Mathf.Abs(_deltaMovement.x) < kSmallFloatValue)
-                {
-                    _deltaMovement.x = 0f;
-                }
-
-                // We add a small fudge factor for the float operations here. if our rayDistance is smaller
-                // than the width + fudge bail out because we have a direct impact
-                if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
-                    break;
+            _externalForce.x = 0f;
+            if (Mathf.Abs(_deltaMovement.x) < kSmallFloatValue)
+            {
+                _deltaMovement.x = 0f;
             }
         }
 
-        /// <summary>
-        /// Checks for collisions in the vertical axis and adjust the speed accordingly to stop at the
-        /// collided object.
-        /// </summary>
-        protected virtual void HandleVerticalCollisions()
+        protected virtual void HandleCollisionsBelow()
+        {
+            var isGoingDown = _deltaMovement.y < 0f;
+
+            StandingOnLastFrame = StandingOn;
+            StandingOn = null;
+            StandingOnCollider = null;
+
+            var closestRaycastHit = GetClosestSurface(RaycastDirection.Down);
+            if (!closestRaycastHit)
+            {
+                return;
+            }
+
+            StandingOn = closestRaycastHit.GameObject;
+            StandingOnCollider = closestRaycastHit.Collider;
+            _state.IsCollidingBelow = true;
+            _state.IsFalling = false;
+
+            if (isGoingDown)
+            {
+                _deltaMovement.y = -closestRaycastHit.Distance + skinWidth;
+                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
+                _speed.y = 0f;
+                _externalForce.y = 0f;
+            }
+        }
+
+        protected virtual void HandleCollisionsAbove()
         {
             var isGoingUp = _deltaMovement.y > 0f;
-            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
-            var rayDirection = isGoingUp ? Vector2.up : Vector2.down;
-            var initialRayOrigin = isGoingUp ? _raycastOrigins.topLeft : _raycastOrigins.bottomLeft;
 
-            for (var i = 0; i < numberOfVerticalRays; i++)
+            var closestRaycastHit = GetClosestSurface(RaycastDirection.Up);
+            if (!closestRaycastHit)
+            {
+                return;
+            }
+
+            _state.IsCollidingAbove = true;
+            if (isGoingUp)
+            {
+                _deltaMovement.y = closestRaycastHit.Distance - skinWidth;
+                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
+                _speed.y = 0f;
+                _externalForce.y = 0f;
+            }
+        }
+
+        protected CollisionSurfaceInfo GetClosestSurface(RaycastDirection direction)
+        {
+            var rayDirection = ToNormalizedVector(direction);
+            int layerMask = direction == RaycastDirection.Down ? collisionMask | oneWayPlatformMask : collisionMask;
+            var rayDistance = direction is RaycastDirection.Up or RaycastDirection.Down
+                ? Mathf.Abs(_deltaMovement.y) + skinWidth
+                : Mathf.Abs(_deltaMovement.x) + skinWidth;
+
+            int numberOfRays;
+            Vector2 initialRayOrigin;
+            RaycastHit2D[] resultsArray;
+            switch (direction)
+            {
+                case RaycastDirection.Up:
+                    numberOfRays = numberOfVerticalRays;
+                    initialRayOrigin = _raycastOrigins.topLeft;
+                    resultsArray = _aboveHitsBuffer;
+                    break;
+                case RaycastDirection.Down:
+                    numberOfRays = numberOfVerticalRays;
+                    initialRayOrigin = _raycastOrigins.bottomLeft;
+                    resultsArray = _belowHitsBuffer;
+                    break;
+                case RaycastDirection.Left:
+                    numberOfRays = numberOfHorizontalRays;
+                    initialRayOrigin = _raycastOrigins.bottomLeft;
+                    resultsArray = _sideHitsBuffer;
+                    break;
+                case RaycastDirection.Right:
+                    numberOfRays = numberOfHorizontalRays;
+                    initialRayOrigin = _raycastOrigins.bottomRight;
+                    resultsArray = _sideHitsBuffer;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(direction), direction, null);
+            }
+
+            var smallestHitDistance = float.MaxValue;
+            RaycastHit2D closestRaycastHit = default;
+            for (var i = 0; i < numberOfRays; i++)
             {
                 var rayOrigin = initialRayOrigin;
-                rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
+                switch (direction)
+                {
+                    case RaycastDirection.Up or RaycastDirection.Down:
+                        rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
+                        break;
+                    case RaycastDirection.Left or RaycastDirection.Right:
+                        rayOrigin += Vector2.up * (_horizontalDistanceBetweenRays * i);
+                        break;
+                }
 
                 Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
-                var raycastHit = Physics2D.Raycast(rayOrigin, rayDirection, rayDistance, collisionMask);
-                if (!isGoingUp && !raycastHit)
-                {
-                    raycastHit = Physics2D.Raycast(rayOrigin, rayDirection, rayDistance, oneWayPlatformMask);
-                }
+                var raycastHitCount = Physics2D.RaycastNonAlloc(
+                    rayOrigin,
+                    rayDirection,
+                    resultsArray,
+                    rayDistance,
+                    layerMask
+                );
 
-                if (!raycastHit)
+                if (raycastHitCount == 0) continue;
+                for (var x = 0; x < raycastHitCount; x++)
                 {
-                    continue;
-                }
+                    var raycastHit = resultsArray[x];
+                    if (raycastHit.distance >= smallestHitDistance)
+                    {
+                        continue;
+                    }
 
-                _deltaMovement.y = (raycastHit.distance - skinWidth) * rayDirection.y;
-                rayDistance = raycastHit.distance;
+                    rayDistance = direction is RaycastDirection.Left or RaycastDirection.Right
+                        ? Mathf.Min(Mathf.Abs(_deltaMovement.x) + skinWidth, raycastHit.distance)
+                        : raycastHit.distance;
 
-                _state.IsCollidingAbove = isGoingUp;
-                _state.IsCollidingBelow = !isGoingUp;
-                _state.IsFalling = !isGoingUp && !_state.IsCollidingBelow;
-                if (!isGoingUp)
-                {
-                    StandingOn = raycastHit.transform.gameObject;
-                    StandingOnCollider = raycastHit.collider;
-                }
+                    smallestHitDistance = rayDistance;
+                    closestRaycastHit = raycastHit;
 
-                if ((_state.IsCollidingBelow && !isGoingUp) || (_state.IsCollidingAbove && isGoingUp))
-                {
-                    //
-                    _speed.y = 0f;
-                    _externalForce.y = 0f;
-                }
-
-                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue)
-                {
-                    _deltaMovement.y = 0f;
-                }
-
-                // We add a small fudge factor for the float operations here. if our rayDistance is smaller
-                // than the width + fudge bail out because we have a direct impact
-                if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
-                {
-                    break;
+                    // We add a small fudge factor for the float operations here. if our rayDistance is smaller
+                    // than the width + fudge bail out because we have a direct impact
+                    if (rayDistance < skinWidth + kSkinWidthFloatFudgeFactor)
+                    {
+                        break;
+                    }
                 }
             }
+
+            return closestRaycastHit
+                ? new CollisionSurfaceInfo(closestRaycastHit, rayDirection)
+                : default;
+        }
+
+        private static Vector2 ToNormalizedVector(RaycastDirection direction)
+            => direction switch
+            {
+                RaycastDirection.Up    => Vector2.up,
+                RaycastDirection.Down  => Vector2.down,
+                RaycastDirection.Left  => Vector2.left,
+                RaycastDirection.Right => Vector2.right,
+                _                      => throw new ArgumentOutOfRangeException(nameof(direction), direction, null)
+            };
+
+        protected enum RaycastDirection : byte
+        {
+
+            Up,
+            Down,
+            Left,
+            Right,
+
         }
 
         [Serializable] protected struct RaycastOriginInfo
@@ -723,6 +804,35 @@ namespace DefaultNamespace
                 IsCollidingLeft = false;
                 IsCollidingRight = false;
             }
+
+        }
+
+        protected readonly struct CollisionSurfaceInfo
+        {
+
+            public CollisionSurfaceInfo(RaycastHit2D hit, Vector2 direction)
+            {
+                Point = hit.point;
+                Normal = hit.normal;
+                Direction = direction;
+                Distance = hit.distance;
+                GameObject = hit.transform.gameObject;
+                Collider = hit.collider;
+            }
+
+            public Vector2 Point { get; }
+
+            public Vector2 Normal { get; }
+
+            public Vector2 Direction { get; }
+
+            public float Distance { get; }
+
+            public GameObject GameObject { get; }
+
+            public Collider2D Collider { get; }
+
+            public static implicit operator bool(CollisionSurfaceInfo _) => _.Collider;
 
         }
 
