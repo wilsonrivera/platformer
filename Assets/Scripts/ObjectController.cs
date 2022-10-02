@@ -124,7 +124,6 @@ namespace DefaultNamespace
             }
 
             UpdateGravity();
-            UpdateExternalForce();
             _state.Reset();
 
             ForcesApplied = _speed + _externalForce;
@@ -135,6 +134,7 @@ namespace DefaultNamespace
             if (_deltaMovement.y != 0f) HandleVerticalCollisions();
             MoveTransform();
             UpdateRaycastOrigins();
+            UpdateExternalForce();
             UpdateState();
 
             Velocity = _deltaMovement / Time.deltaTime;
@@ -608,8 +608,13 @@ namespace DefaultNamespace
                     StandingOnCollider = raycastHit.collider;
                 }
 
-                _speed.y = 0f;
-                _externalForce.y = 0f;
+                if ((_state.IsCollidingBelow && !isGoingUp) || (_state.IsCollidingAbove && isGoingUp))
+                {
+                    //
+                    _speed.y = 0f;
+                    _externalForce.y = 0f;
+                }
+
                 if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue)
                 {
                     _deltaMovement.y = 0f;

@@ -29,6 +29,11 @@ namespace DefaultNamespace
             {
                 _controller.SetHorizontalVelocity(0f);
             }
+
+            if (Input.GetKeyDown(KeyCode.Space))
+            {
+                _controller.SetVerticalForce(5);
+            }
         }
 
     }
