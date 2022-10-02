@@ -757,7 +757,7 @@ MonoBehaviour:
   airFriction: 1
   collisionMask:
     serializedVersion: 2
-    m_Bits: 469762048
+    m_Bits: 335544320
   oneWayPlatformMask:
     serializedVersion: 2
     m_Bits: 134217728
