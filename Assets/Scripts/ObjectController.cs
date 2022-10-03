@@ -490,7 +490,8 @@ namespace DefaultNamespace
             var friction = _state.IsGrounded ? GroundFriction : AirFriction;
             _externalForce = Vector2.MoveTowards(
                 _externalForce,
-                Vector2.zero, _externalForce.magnitude * friction * Time.fixedDeltaTime
+                Vector2.zero,
+                _externalForce.magnitude * Time.fixedDeltaTime * friction
             );
 
             if (_externalForce.magnitude <= kMinimumMagnitude)

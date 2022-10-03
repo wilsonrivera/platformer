@@ -753,8 +753,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   gravityScale: 1
-  groundFriction: 1.9
-  airFriction: 1
+  groundFriction: 20
+  airFriction: 5
   collisionMask:
     serializedVersion: 2
     m_Bits: 335544320
@@ -1174,6 +1174,7 @@ GameObject:
   - component: {fileID: 1798370897}
   - component: {fileID: 1798370899}
   - component: {fileID: 1798370900}
+  - component: {fileID: 1798370901}
   m_Layer: 26
   m_Name: Square
   m_TagString: Untagged
@@ -1240,14 +1241,14 @@ Transform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1798370896}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.0523, y: -3.969, z: 0}
+  m_LocalRotation: {x: -0, y: -0, z: 0.38533872, w: 0.9227752}
+  m_LocalPosition: {x: 0.432, y: -3.809, z: 0}
   m_LocalScale: {x: 1.3182296, y: 0.2951, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_RootOrder: 5
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 45.33}
 --- !u!114 &1798370899
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1288,3 +1289,15 @@ BoxCollider2D:
   serializedVersion: 2
   m_Size: {x: 1, y: 1}
   m_EdgeRadius: 0
+--- !u!114 &1798370901
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1798370896}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8857567c77534e02a8c3bb18d13caf57, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
