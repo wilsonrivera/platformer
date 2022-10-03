@@ -10,12 +10,9 @@ namespace DefaultNamespace
 
         private const float kSmallFloatValue = 0.0001f;
         private const float kSkinWidthFloatFudgeFactor = 0.001f;
-        private const float kMinimumMagnitude = 0.001f;
         private const float kMovementDirectionThreshold = 0.0001f;
 
         [SerializeField] private float gravityScale = 1f;
-        [SerializeField] private float groundFriction = 30f;
-        [SerializeField] private float airFriction = 15f;
 
         [Header("Collisions")]
         [SerializeField] private LayerMask collisionMask;
@@ -33,39 +30,48 @@ namespace DefaultNamespace
         protected Transform _transform;
         protected BoxCollider2D _boxCollider;
         // State tracking
-        protected Vector2 _speed;
-        protected Vector2 _externalForce;
+        protected ObjectControllerState _state;
+        private ObjectControllerBounds _bounds;
+
         protected float _currentGravity;
         protected float _slowFallFactor;
-        protected RaycastOriginInfo _raycastOrigins;
-        protected ObjectControllerState _state;
+
+        protected bool _shouldComputeSpeed;
+        protected Vector2 _speed;
+        protected Vector2 _externalForce;
+        protected Vector2 _deltaMovement;
+        protected float _movementDirection;
+        protected float _storedMovementDirection;
 
         protected bool _colliderResized;
         protected Vector2 _originalColliderSize;
         protected Vector2 _originalColliderOffset;
 
-        protected Vector2 _deltaMovement;
-        protected float _movementDirection;
-
-        private float _storedMovementDirection;
+        private RaycastOriginsInfo _raycastOrigins;
         private float _verticalDistanceBetweenRays;
         private float _horizontalDistanceBetweenRays;
         private readonly RaycastHit2D[] _sideHitsBuffer = new RaycastHit2D[4];
         private readonly RaycastHit2D[] _belowHitsBuffer = new RaycastHit2D[4];
         private readonly RaycastHit2D[] _aboveHitsBuffer = new RaycastHit2D[4];
 
+        /// <summary>
+        /// Gets the world space position of the controller.
+        /// </summary>
         public Vector2 Position => _transform.position;
+
+        public Vector2 Speed => _speed;
+
+        public Vector2 ExternalForce => _externalForce;
 
         public Vector2 ForcesApplied { get; protected set; }
 
-        public Vector2 Velocity { get; protected set; }
+        public Vector2 WorldSpeed { get; protected set; }
 
         public ObjectControllerState State => _state;
 
-        /// <summary>
-        /// Gets the time (in seconds) since the last time the character was grounded
-        /// </summary>
-        public float TimeAirborne { get; protected set; }
+        public ObjectControllerBounds Bounds => _bounds;
+
+        public RaycastOriginsInfo RaycastOrigins => _raycastOrigins;
 
         /// <summary>
         /// Is this controller affected by gravity?
@@ -82,11 +88,10 @@ namespace DefaultNamespace
                 ? 0f
                 : Physics2D.gravity.y * (Application.isPlaying ? GravityScale : gravityScale);
 
-        public bool IgnoreFriction { get; protected set; }
-
-        public float GroundFriction { get; protected set; }
-
-        public float AirFriction { get; protected set; }
+        /// <summary>
+        /// Gets the time (in seconds) since the last time the character was grounded
+        /// </summary>
+        public float TimeAirborne { get; protected set; }
 
         /// <summary>
         /// The object the controller is standing on.
@@ -116,12 +121,11 @@ namespace DefaultNamespace
                 rb.useFullKinematicContacts = true;
             }
 
+            _bounds = new ObjectControllerBounds(_boxCollider);
             _originalColliderSize = _boxCollider.size;
             _originalColliderOffset = _boxCollider.offset;
 
             GravityScale = gravityScale;
-            GroundFriction = groundFriction;
-            AirFriction = airFriction;
 
             _state.Reset();
             CalculateDistanceBetweenRays();
@@ -135,9 +139,13 @@ namespace DefaultNamespace
                 return;
             }
 
+            UpdateGravity();
             OnFrameEnter();
-            DetermineMovementDirection();
             UpdateRaycastOrigins();
+
+            ForcesApplied = _speed;
+
+            DetermineMovementDirection();
             HandleCollisionsToTheSide();
             HandleCollisionsBelow();
             HandleCollisionsAbove();
@@ -145,9 +153,14 @@ namespace DefaultNamespace
             MoveTransform();
 
             UpdateRaycastOrigins();
-            UpdateExternalForce();
-            UpdateState();
+            ComputeNewSpeed();
+
+            _externalForce.x = 0;
+            _externalForce.y = 0;
+
             OnFrameExit();
+
+            WorldSpeed = _speed;
         }
 
         protected virtual void LateUpdate()
@@ -162,47 +175,13 @@ namespace DefaultNamespace
 
             var bounds = col.bounds;
             bounds.Expand(-2f * skinWidth);
-
-            var origins = new RaycastOriginInfo
-            {
-                bottomLeft = bounds.min,
-                bottomRight = new Vector2(bounds.max.x, bounds.min.y),
-                topLeft = new Vector2(bounds.min.x, bounds.max.y),
-                topRight = bounds.max
-            };
+            var origins = RaycastOriginsInfo.FromBounds(bounds);
 
             Gizmos.color = Color.yellow;
-            Gizmos.DrawLine(origins.bottomLeft, origins.bottomRight);
-            Gizmos.DrawLine(origins.topLeft, origins.topRight);
-            Gizmos.DrawLine(origins.bottomLeft, origins.topLeft);
-            Gizmos.DrawLine(origins.bottomRight, origins.topRight);
-        }
-
-        /// <summary>
-        /// Use this to set the velocity applied to the controller.
-        /// </summary>
-        /// <param name="value">The velocity to apply to the controller.</param>
-        public virtual void SetVelocity(Vector2 value)
-        {
-            _speed = value;
-        }
-
-        /// <summary>
-        /// Use this to set the horizontal velocity applied to the controller.
-        /// </summary>
-        /// <param name="value">The horizontal velocity to apply to the controller.</param>
-        public virtual void SetHorizontalVelocity(float value)
-        {
-            _speed.x = value;
-        }
-
-        /// <summary>
-        /// Use this to set the vertical velocity applied to the controller.
-        /// </summary>
-        /// <param name="value">The vertical velocity to apply to the controller.</param>
-        public virtual void SetVerticalVelocity(float value)
-        {
-            _speed.y = value;
+            Gizmos.DrawLine(origins.BottomLeft, origins.BottomRight);
+            Gizmos.DrawLine(origins.TopLeft, origins.TopRight);
+            Gizmos.DrawLine(origins.BottomLeft, origins.TopLeft);
+            Gizmos.DrawLine(origins.BottomRight, origins.TopRight);
         }
 
         /// <summary>
@@ -211,6 +190,7 @@ namespace DefaultNamespace
         /// <param name="value">The force to add to the controller.</param>
         public virtual void AddForce(Vector2 value)
         {
+            _speed += value;
             _externalForce += value;
         }
 
@@ -220,6 +200,7 @@ namespace DefaultNamespace
         /// <param name="value">The horizontal force to add to the controller.</param>
         public virtual void AddHorizontalForce(float value)
         {
+            _speed.x += value;
             _externalForce.x += value;
         }
 
@@ -229,6 +210,7 @@ namespace DefaultNamespace
         /// <param name="value">The vertical force to add to the controller.</param>
         public virtual void AddVerticalForce(float value)
         {
+            _speed.y += value;
             _externalForce.y += value;
         }
 
@@ -238,12 +220,8 @@ namespace DefaultNamespace
         /// <param name="value">The force to apply to the controller.</param>
         public virtual void SetForce(Vector2 value)
         {
+            _speed = value;
             _externalForce = value;
-            if (_speed.y < 0f)
-            {
-                // Reset the gravity
-                _speed.y = 0f;
-            }
         }
 
         /// <summary>
@@ -252,6 +230,7 @@ namespace DefaultNamespace
         /// <param name="value">The horizontal force to apply to the controller.</param>
         public virtual void SetHorizontalForce(float value)
         {
+            _speed.x = value;
             _externalForce.x = value;
         }
 
@@ -261,12 +240,8 @@ namespace DefaultNamespace
         /// <param name="value">The vertical force to apply to the controller.</param>
         public virtual void SetVerticalForce(float value)
         {
+            _speed.y = value;
             _externalForce.y = value;
-            if (_speed.y < 0f)
-            {
-                // Reset the gravity
-                _speed.y = 0f;
-            }
         }
 
         /// <summary>
@@ -292,21 +267,6 @@ namespace DefaultNamespace
             GravityScale = Mathf.Clamp(value, 0f, 25f);
         }
 
-        public virtual void SetFrictionIgnored(bool ignore)
-        {
-            IgnoreFriction = ignore;
-        }
-
-        public virtual void SetGroundFriction(float value)
-        {
-            GroundFriction = value;
-        }
-
-        public virtual void SetAirFriction(float value)
-        {
-            AirFriction = value;
-        }
-
         /// <summary>
         /// Moves the controller's transform to the desired position.
         /// </summary>
@@ -322,8 +282,6 @@ namespace DefaultNamespace
 
             _transform.position = nextPosition;
             Physics2D.SyncTransforms();
-
-            Velocity = Vector2.zero;
             UpdateRaycastOrigins();
         }
 
@@ -339,7 +297,7 @@ namespace DefaultNamespace
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
                 var raycastHit = Physics2D.Raycast(
-                    _raycastOrigins.bottomLeft,
+                    _raycastOrigins.BottomLeft,
                     Vector2.down,
                     100f,
                     collisionMask | oneWayPlatformMask
@@ -412,10 +370,10 @@ namespace DefaultNamespace
 
             // Cast two rays above the controller to check for obstacles. If we didn't hit anything, we can go back
             // to original size, otherwise we can't
-            var topLeft = _raycastOrigins.topLeft + (Vector2)up * kSmallFloatValue;
+            var topLeft = _raycastOrigins.TopLeft + (Vector2)up * kSmallFloatValue;
             bool headCheckLeft = Physics2D.Raycast(topLeft, up, headCheckDistance, collisionMask);
 
-            var topRight = _raycastOrigins.topRight + (Vector2)up * kSmallFloatValue;
+            var topRight = _raycastOrigins.TopRight + (Vector2)up * kSmallFloatValue;
             bool headCheckRight = Physics2D.Raycast(topRight, up, headCheckDistance, collisionMask);
             return !headCheckLeft && !headCheckRight;
         }
@@ -441,20 +399,29 @@ namespace DefaultNamespace
             _horizontalDistanceBetweenRays = colliderUsableWidth / (numberOfVerticalRays - 1);
         }
 
-        // <summary>
-        // Resets the <see cref="RaycastOrigins"/> to the current extents of the collider inset by the
-        // <see cref="SkinWidth"/>. It is inset to avoid casting a ray from a position directly touching another
-        // collider which results in wonky normal data.
-        // </summary>
+        /// <summary>
+        /// Resets the raycast origins to the current extents of the collider inset by the
+        /// <see cref="skinWidth"/>. It is inset to avoid casting a ray from a position directly touching another
+        /// collider which results in wonky normal data.
+        /// </summary>
         protected void UpdateRaycastOrigins()
         {
             var bounds = _boxCollider.bounds;
             bounds.Expand(-2f * skinWidth);
 
-            _raycastOrigins.bottomLeft = bounds.min;
-            _raycastOrigins.bottomRight = new Vector2(bounds.max.x, bounds.min.y);
-            _raycastOrigins.topLeft = new Vector2(bounds.min.x, bounds.max.y);
-            _raycastOrigins.topRight = bounds.max;
+            _bounds.UpdateSize();
+            _raycastOrigins = RaycastOriginsInfo.FromBounds(bounds);
+        }
+
+        protected virtual void OnFrameEnter()
+        {
+            _deltaMovement = _speed * Time.deltaTime;
+            _shouldComputeSpeed = true;
+            _state.Reset();
+        }
+
+        protected virtual void OnFrameExit()
+        {
         }
 
         /// <summary>
@@ -475,27 +442,16 @@ namespace DefaultNamespace
             }
         }
 
-        /// <summary>
-        /// Reduces the external force over time according to the air or ground frictions.
-        /// </summary>
-        protected virtual void UpdateExternalForce()
+        protected virtual void ComputeNewSpeed()
         {
-            if (IgnoreFriction)
-            {
-                return;
-            }
+            var deltaTime = Time.deltaTime;
+            if (!_shouldComputeSpeed || deltaTime == 0f) return;
 
-            var friction = _state.IsGrounded ? GroundFriction : AirFriction;
-            _externalForce = Vector2.MoveTowards(
-                _externalForce,
-                Vector2.zero,
-                _externalForce.magnitude * Time.fixedDeltaTime * friction
-            );
+            _speed = _deltaMovement / deltaTime;
+            if (Mathf.Abs(_speed.x) < kSmallFloatValue) _speed.x = 0f;
+            if (Mathf.Abs(_speed.y) < kSmallFloatValue) _speed.y = 0f;
 
-            if (_externalForce.magnitude <= kMinimumMagnitude)
-            {
-                _externalForce = Vector2.zero;
-            }
+            _shouldComputeSpeed = false;
         }
 
         protected virtual void MoveTransform()
@@ -508,64 +464,6 @@ namespace DefaultNamespace
             Debug.DrawRay(Position, _deltaMovement * 3f, Color.green);
             _transform.Translate(_deltaMovement, Space.Self);
             Physics2D.SyncTransforms();
-        }
-
-        protected virtual void UpdateState()
-        {
-            IgnoreFriction = false;
-        }
-
-        protected virtual void OnFrameEnter()
-        {
-            UpdateGravity();
-            _state.Reset();
-
-            ForcesApplied = _speed + _externalForce;
-            _deltaMovement = ForcesApplied * Time.deltaTime;
-        }
-
-        protected virtual void OnFrameExit()
-        {
-            Velocity = _deltaMovement / Time.deltaTime;
-            if (Velocity.magnitude < kMinimumMagnitude)
-            {
-                Velocity = Vector2.zero;
-            }
-
-            if ((_state.IsCollidingBelow && ForcesApplied.y < 0f) ||
-                (_state.IsCollidingAbove && ForcesApplied.y > 0f))
-            {
-                _speed.y = 0f;
-                _externalForce.y = 0f;
-            }
-
-            if (_state.IsCollidingLeft && _state.IsCollidingRight &&
-                Math.Sign(_deltaMovement.x) == Math.Sign(_movementDirection))
-            {
-                _speed.x = 0f;
-                _externalForce.x = 0f;
-            }
-        }
-
-        /// <summary>
-        ///  Returns the closest "safe" point (not overlapping any platform) to the destination.
-        /// </summary>
-        /// <param name="destination"></param>
-        /// <returns></returns>
-        protected virtual Vector2 GetClosestSafePosition(Vector2 destination)
-        {
-            var layerMask = collisionMask | oneWayPlatformMask;
-            var hit = Physics2D.OverlapBox(destination, _boxCollider.size, 0f, layerMask);
-            if (!hit)
-            {
-                return destination;
-            }
-
-            // If the original destination wasn't safe, we find the closest safe point between
-            // our controller and the obstacle
-            destination -= 0.05f * (Vector2)(hit.transform.position - (Vector3)Position).normalized;
-            hit = Physics2D.OverlapBox(destination, _boxCollider.size, 0, layerMask);
-            return !hit ? destination : Position;
         }
 
         /// <summary>
@@ -594,12 +492,33 @@ namespace DefaultNamespace
             _storedMovementDirection = _movementDirection;
         }
 
+        /// <summary>
+        ///  Returns the closest "safe" point (not overlapping any platform) to the destination.
+        /// </summary>
+        /// <param name="destination"></param>
+        /// <returns></returns>
+        protected virtual Vector2 GetClosestSafePosition(Vector2 destination)
+        {
+            var layerMask = collisionMask | oneWayPlatformMask;
+            var hit = Physics2D.OverlapBox(destination, _boxCollider.size, 0f, layerMask);
+            if (!hit)
+            {
+                return destination;
+            }
+
+            // If the original destination wasn't safe, we find the closest safe point between
+            // our controller and the obstacle
+            destination -= 0.05f * (Vector2)(hit.transform.position - (Vector3)Position).normalized;
+            hit = Physics2D.OverlapBox(destination, _boxCollider.size, 0, layerMask);
+            return !hit ? destination : Position;
+        }
+
         protected virtual void HandleCollisionsToTheSide()
         {
             var isGoingRight = _movementDirection > 0f;
             var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
             var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
-            var initialRayOrigin = isGoingRight ? _raycastOrigins.bottomRight : _raycastOrigins.bottomLeft;
+            var initialRayOrigin = isGoingRight ? _raycastOrigins.BottomRight : _raycastOrigins.BottomLeft;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
 
@@ -647,13 +566,14 @@ namespace DefaultNamespace
                 }
             }
 
-            if (!closestRaycastHit)
+            if (!closestRaycastHit || new Vector2(_movementDirection, 0f) != rayDirection)
             {
                 return;
             }
 
             var minDistance = Mathf.Min(Mathf.Abs(_deltaMovement.x), closestRaycastHit.distance - skinWidth);
             _deltaMovement.x = minDistance * rayDirection.x;
+            _shouldComputeSpeed = true;
 
             _state.IsCollidingLeft = !isGoingRight;
             _state.IsCollidingRight = isGoingRight;
@@ -677,14 +597,13 @@ namespace DefaultNamespace
                 return;
             }
 
-            var isGoingDown = _deltaMovement.y < 0f;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
-                var rayOrigin = _raycastOrigins.bottomLeft;
+                var rayOrigin = _raycastOrigins.BottomLeft;
                 rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
 
                 Debug.DrawRay(rayOrigin, Vector2.down * rayDistance, Color.red);
@@ -718,31 +637,41 @@ namespace DefaultNamespace
                 }
             }
 
-            if (!closestRaycastHit || !isGoingDown)
+            if (!closestRaycastHit)
             {
                 return;
             }
 
-            StandingOn = closestRaycastHit.transform.gameObject;
-            StandingOnCollider = closestRaycastHit.collider;
-            _state.IsCollidingBelow = true;
             _state.IsFalling = false;
+            if (_externalForce.y > 0f && _speed.y > 0f)
+            {
+                // We are jumping, only apply that
+                _state.IsCollidingBelow = false;
+                _deltaMovement.y = _speed.y * Time.deltaTime;
+            }
+            else
+            {
+                // We have landed on something
+                StandingOn = closestRaycastHit.transform.gameObject;
+                StandingOnCollider = closestRaycastHit.collider;
+                _state.IsCollidingBelow = true;
 
-            _deltaMovement.y = -closestRaycastHit.distance + skinWidth;
+                _deltaMovement.y = -closestRaycastHit.distance + skinWidth;
+            }
+
+            if (!_state.WasGroundedLastFrame && _speed.y > 0f) _deltaMovement.y += _speed.y * Time.deltaTime;
             if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
         }
 
         protected virtual void HandleCollisionsAbove()
         {
-            var isGoingUp = _deltaMovement.y > 0f;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
-                var rayOrigin = _raycastOrigins.topLeft;
-                rayOrigin.y += skinWidth / 2f;
+                var rayOrigin = _raycastOrigins.TopLeft;
                 rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
 
                 Debug.DrawRay(rayOrigin, Vector2.up * rayDistance, Color.red);
@@ -776,24 +705,17 @@ namespace DefaultNamespace
                 }
             }
 
-            if (!closestRaycastHit || !isGoingUp)
+            if (!closestRaycastHit)
             {
                 return;
             }
 
             _state.IsCollidingAbove = true;
             _deltaMovement.y = closestRaycastHit.distance - skinWidth;
-            if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
-        }
+            if (_state.IsGrounded && _deltaMovement.y < 0f) _deltaMovement.y = 0f;
+            if (!_state.WasCeilingedLastFrame) _speed = new Vector2(_speed.x, 0f);
 
-        [Serializable] protected struct RaycastOriginInfo
-        {
-
-            public Vector2 topLeft;
-            public Vector2 bottomLeft;
-            public Vector2 topRight;
-            public Vector2 bottomRight;
-
+            SetVerticalForce(0f);
         }
 
         [Serializable] public struct ObjectControllerState
@@ -880,6 +802,96 @@ namespace DefaultNamespace
                 IsCollidingLeft = false;
                 IsCollidingRight = false;
             }
+
+        }
+
+        public struct ObjectControllerBounds
+        {
+
+            private readonly BoxCollider2D _collider;
+
+            public ObjectControllerBounds(BoxCollider2D collider)
+            {
+                _collider = collider;
+                Width = 0f;
+                Height = 0f;
+            }
+
+            public float Width { get; private set; }
+
+            public float Height { get; private set; }
+
+            public Vector2 Top
+            {
+                get
+                {
+                    var bounds = _collider.bounds;
+                    return new Vector2(bounds.center.x, bounds.max.y);
+                }
+            }
+
+            public Vector2 Bottom
+            {
+                get
+                {
+                    var bounds = _collider.bounds;
+                    return new Vector2(bounds.center.x, bounds.min.y);
+                }
+            }
+
+            public Vector2 Left
+            {
+                get
+                {
+                    var bounds = _collider.bounds;
+                    return new Vector2(bounds.min.x, bounds.center.y);
+                }
+            }
+
+            public Vector2 Right
+            {
+                get
+                {
+                    var bounds = _collider.bounds;
+                    return new Vector2(bounds.max.x, bounds.center.y);
+                }
+            }
+
+            public void UpdateSize()
+            {
+                var bounds = _collider.bounds;
+                Width = Vector2.Distance(bounds.min, new Vector2(bounds.max.x, bounds.min.y));
+                Height = Vector2.Distance(bounds.min, new Vector2(bounds.min.x, bounds.max.y));
+            }
+
+        }
+
+        public struct RaycastOriginsInfo
+        {
+
+            private RaycastOriginsInfo(Vector2 topLeft, Vector2 bottomLeft, Vector2 topRight, Vector2 bottomRight)
+            {
+                TopLeft = topLeft;
+                BottomLeft = bottomLeft;
+                TopRight = topRight;
+                BottomRight = bottomRight;
+            }
+
+            public Vector2 TopLeft { get; }
+
+            public Vector2 BottomLeft { get; }
+
+            public Vector2 TopRight { get; }
+
+            public Vector2 BottomRight { get; }
+
+            public static RaycastOriginsInfo FromBounds(Bounds bounds)
+                => new(
+                    new Vector2(bounds.min.x, bounds.max.y),
+                    bounds.min,
+                    bounds.max,
+                    new Vector2(bounds.max.x, bounds.min.y)
+                );
 
         }
 

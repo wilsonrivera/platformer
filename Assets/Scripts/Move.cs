@@ -37,19 +37,18 @@ namespace DefaultNamespace
                 JumpEnabled = true;
             }
 
+            var movementSpeed = 0f;
             if (Input.GetKey(KeyCode.A))
             {
-                _controller.SetHorizontalVelocity(-3f);
+                movementSpeed = -3f;
             }
             else if (Input.GetKey(KeyCode.D))
             {
-                _controller.SetHorizontalVelocity(3f);
-            }
-            else
-            {
-                _controller.SetHorizontalVelocity(0f);
+                movementSpeed = 3f;
             }
 
+            var decay = _controller.State.IsGrounded ? 20f : 5f;
+            _controller.SetHorizontalForce(Mathf.Lerp(_controller.Speed.x, movementSpeed, Time.deltaTime * decay));
             if (Input.GetKeyDown(KeyCode.Space) && JumpEnabled)
             {
                 _jumpedAt = Time.time;
