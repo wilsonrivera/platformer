@@ -665,7 +665,7 @@ namespace DefaultNamespace
 
         protected virtual void HandleCollisionsAbove()
         {
-            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
+            var rayDistance = _state.IsGrounded ? skinWidth : Mathf.Abs(_deltaMovement.y);// + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
 
@@ -693,7 +693,7 @@ namespace DefaultNamespace
                     }
 
                     rayDistance = raycastHit.distance;
-                    smallestHitDistance = raycastHit.distance;
+                    smallestHitDistance = rayDistance;
                     closestRaycastHit = raycastHit;
                 }
 
@@ -713,7 +713,6 @@ namespace DefaultNamespace
             _state.IsCollidingAbove = true;
             _deltaMovement.y = closestRaycastHit.distance - skinWidth;
             if (_state.IsGrounded && _deltaMovement.y < 0f) _deltaMovement.y = 0f;
-            if (!_state.WasCeilingedLastFrame) _speed = new Vector2(_speed.x, 0f);
 
             SetVerticalForce(0f);
         }
