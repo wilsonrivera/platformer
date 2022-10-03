@@ -1,4 +1,5 @@
-﻿using UnityEditor;
+﻿using System.Globalization;
+using UnityEditor;
 using UnityEngine;
 
 namespace DefaultNamespace.Editor
@@ -20,10 +21,15 @@ namespace DefaultNamespace.Editor
         /// <inheritdoc />
         public override void OnInspectorGUI()
         {
-            DrawDefaultInspector();
+            var controller = (ObjectController)target;
 
             EditorGUILayout.Space();
-            var controller = (ObjectController)target;
+            EditorGUI.BeginDisabledGroup(true);
+            EditorGUILayout.LabelField("Applied Gravity", controller.Gravity.ToString(CultureInfo.InvariantCulture));
+            EditorGUI.EndDisabledGroup();
+
+            EditorGUILayout.Space();
+            DrawDefaultInspector();
 
             _showState.value = EditorGUILayout.Foldout((bool)_showState, sShowStateLabel, true);
             if (_showState.value)

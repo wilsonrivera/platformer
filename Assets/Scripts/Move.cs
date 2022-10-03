@@ -9,6 +9,21 @@ namespace DefaultNamespace
     {
 
         private ObjectController _controller;
+        private bool _jumpEnabled;
+        private float _jumpedAt;
+
+        public bool JumpEnabled
+        {
+            get { return _jumpEnabled; }
+            set
+            {
+                _jumpEnabled = value;
+                if (value)
+                {
+                    _jumpedAt = Time.time;
+                }
+            }
+        }
 
         private void Awake()
         {
@@ -17,6 +32,11 @@ namespace DefaultNamespace
 
         private void Update()
         {
+            if (_controller.State.IsGrounded && Time.time - _jumpedAt > 0.05f)
+            {
+                JumpEnabled = true;
+            }
+
             if (Input.GetKey(KeyCode.A))
             {
                 _controller.SetHorizontalVelocity(-3f);
@@ -30,9 +50,11 @@ namespace DefaultNamespace
                 _controller.SetHorizontalVelocity(0f);
             }
 
-            if (Input.GetKeyDown(KeyCode.Space) && _controller.State.IsGrounded)
+            if (Input.GetKeyDown(KeyCode.Space) && JumpEnabled)
             {
-                _controller.SetVerticalForce(5);
+                _jumpedAt = Time.time;
+                JumpEnabled = false;
+                _controller.SetVerticalForce(Mathf.Sqrt(2f * 2f * Mathf.Abs(_controller.Gravity)));
             }
         }
 

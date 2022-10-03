@@ -74,6 +74,14 @@ namespace DefaultNamespace
 
         public float GravityScale { get; protected set; }
 
+        /// <summary>
+        /// Gets the gravity applied to the controller.
+        /// </summary>
+        public float Gravity
+            => !IsGravityActive
+                ? 0f
+                : Physics2D.gravity.y * (Application.isPlaying ? GravityScale : gravityScale);
+
         public bool IgnoreFriction { get; protected set; }
 
         public float GroundFriction { get; protected set; }
@@ -454,27 +462,17 @@ namespace DefaultNamespace
         /// </summary>
         protected virtual void UpdateGravity()
         {
-            if (!IsGravityActive || GravityScale == 0f)
+            _currentGravity = Gravity * Time.fixedDeltaTime;
+            if (IsGravityActive)
             {
-                // Either gravity is not active for this controller or the controller doesn't have any gravity scale
-                return;
+                // Only apply gravity when it is enabled for this controller
+                _speed.y += _currentGravity;
             }
 
-            _currentGravity = Physics2D.gravity.y * GravityScale * Time.fixedDeltaTime;
-            _speed.y += _currentGravity;
             if (_slowFallFactor != 0f)
             {
                 _speed.y *= _slowFallFactor;
             }
-
-            // if (speed.y > 0)
-            // {
-            //     speed.y += g;
-            // }
-            // else
-            // {
-            //     externalForce.y += g;
-            // }
         }
 
         /// <summary>
@@ -720,7 +718,7 @@ namespace DefaultNamespace
                 }
             }
 
-            if (!closestRaycastHit)
+            if (!closestRaycastHit || !isGoingDown)
             {
                 return;
             }
@@ -730,11 +728,8 @@ namespace DefaultNamespace
             _state.IsCollidingBelow = true;
             _state.IsFalling = false;
 
-            if (isGoingDown)
-            {
-                _deltaMovement.y = -closestRaycastHit.distance + skinWidth;
-                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
-            }
+            _deltaMovement.y = -closestRaycastHit.distance + skinWidth;
+            if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
         }
 
         protected virtual void HandleCollisionsAbove()
@@ -747,6 +742,7 @@ namespace DefaultNamespace
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
                 var rayOrigin = _raycastOrigins.topLeft;
+                rayOrigin.y += skinWidth / 2f;
                 rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
 
                 Debug.DrawRay(rayOrigin, Vector2.up * rayDistance, Color.red);
@@ -780,17 +776,14 @@ namespace DefaultNamespace
                 }
             }
 
-            if (!closestRaycastHit)
+            if (!closestRaycastHit || !isGoingUp)
             {
                 return;
             }
 
             _state.IsCollidingAbove = true;
-            if (isGoingUp)
-            {
-                _deltaMovement.y = closestRaycastHit.distance - skinWidth;
-                if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
-            }
+            _deltaMovement.y = closestRaycastHit.distance - skinWidth;
+            if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
         }
 
         [Serializable] protected struct RaycastOriginInfo
