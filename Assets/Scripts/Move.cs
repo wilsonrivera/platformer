@@ -30,7 +30,7 @@ namespace DefaultNamespace
                 _controller.SetHorizontalVelocity(0f);
             }
 
-            if (Input.GetKeyDown(KeyCode.Space))
+            if (Input.GetKeyDown(KeyCode.Space) && _controller.State.IsGrounded)
             {
                 _controller.SetVerticalForce(5);
             }

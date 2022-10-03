@@ -102,6 +102,12 @@ namespace DefaultNamespace
             _transform = transform;
             _boxCollider = GetComponent<BoxCollider2D>();
 
+            if (TryGetComponent<Rigidbody2D>(out var rb))
+            {
+                rb.bodyType = RigidbodyType2D.Kinematic;
+                rb.useFullKinematicContacts = true;
+            }
+
             _originalColliderSize = _boxCollider.size;
             _originalColliderOffset = _boxCollider.offset;
 
