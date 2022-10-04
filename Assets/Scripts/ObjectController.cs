@@ -1,4 +1,4 @@
-﻿using System;
+﻿using MoreMountains.Tools;
 using UnityEngine;
 
 namespace DefaultNamespace
@@ -182,7 +182,7 @@ namespace DefaultNamespace
             bounds.Expand(-2f * skinWidth);
             var origins = RaycastOriginsInfo.FromBounds(bounds);
 
-            Gizmos.color = Color.yellow;
+            Gizmos.color = MMColors.LightPink;
             Gizmos.DrawLine(origins.BottomLeft, origins.BottomRight);
             Gizmos.DrawLine(origins.TopLeft, origins.TopRight);
             Gizmos.DrawLine(origins.BottomLeft, origins.TopLeft);
@@ -399,6 +399,18 @@ namespace DefaultNamespace
             // _movingPlatformCurrentGravity=0;
         }
 
+        protected static int RaycastNonAlloc(
+            Vector2 origin,
+            Vector2 direction,
+            RaycastHit2D[] results,
+            float distance,
+            LayerMask layerMask,
+            Color color)
+        {
+            Debug.DrawRay(origin, direction * distance, color);
+            return Physics2D.RaycastNonAlloc(origin, direction, results, distance, layerMask);
+        }
+
         /// <summary>
         /// This should be called anytime you have to modify the <see cref="BoxCollider2D"/> at runtime. It
         /// will recalculate the distance between the rays used for collision detection.
@@ -610,16 +622,13 @@ namespace DefaultNamespace
 
             for (var i = 0; i < numberOfHorizontalRays; i++)
             {
-                var rayOrigin = initialRayOrigin;
-                rayOrigin += Vector2.up * (_horizontalDistanceBetweenRays * i);
-
-                Debug.DrawRay(rayOrigin, rayDirection * rayDistance, Color.red);
-                var raycastHitCount = Physics2D.RaycastNonAlloc(
-                    rayOrigin,
+                var raycastHitCount = RaycastNonAlloc(
+                    initialRayOrigin + (Vector2.up * (_horizontalDistanceBetweenRays * i)),
                     rayDirection,
                     _sideHitsBuffer,
                     rayDistance,
-                    collisionMask
+                    collisionMask,
+                    MMColors.Indigo
                 );
 
                 if (raycastHitCount == 0) continue;
@@ -681,13 +690,13 @@ namespace DefaultNamespace
                 var rayOrigin = _raycastOrigins.BottomLeft;
                 rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
 
-                Debug.DrawRay(rayOrigin, Vector2.down * rayDistance, Color.red);
-                var raycastHitCount = Physics2D.RaycastNonAlloc(
+                var raycastHitCount = RaycastNonAlloc(
                     rayOrigin,
                     Vector2.down,
                     _belowHitsBuffer,
                     rayDistance,
-                    collisionMask | oneWayPlatformMask
+                    collisionMask | oneWayPlatformMask,
+                    MMColors.CornflowerBlue
                 );
 
                 if (raycastHitCount == 0) continue;
@@ -758,16 +767,13 @@ namespace DefaultNamespace
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
-                var rayOrigin = _raycastOrigins.TopLeft;
-                rayOrigin += Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x);
-
-                Debug.DrawRay(rayOrigin, Vector2.up * rayDistance, Color.red);
-                var raycastHitCount = Physics2D.RaycastNonAlloc(
-                    rayOrigin,
+                var raycastHitCount = RaycastNonAlloc(
+                    _raycastOrigins.TopLeft + Vector2.right * (_verticalDistanceBetweenRays * i + _deltaMovement.x),
                     Vector2.up,
                     _aboveHitsBuffer,
                     rayDistance,
-                    collisionMask
+                    collisionMask,
+                    MMColors.CornflowerBlue
                 );
 
                 if (raycastHitCount == 0) continue;
