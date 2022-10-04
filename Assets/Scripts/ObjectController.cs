@@ -1,4 +1,5 @@
-﻿using MoreMountains.Tools;
+﻿using System.Collections;
+using MoreMountains.Tools;
 using UnityEngine;
 
 namespace DefaultNamespace
@@ -47,6 +48,9 @@ namespace DefaultNamespace
         protected bool _colliderResized;
         protected Vector2 _originalColliderSize;
         protected Vector2 _originalColliderOffset;
+
+        private bool _collisionsDisabled;
+        private Collider2D _ignoredCollider;
 
         protected PlatformController _platformController;
 
@@ -394,9 +398,8 @@ namespace DefaultNamespace
             }
 
             SetGravityActive(true);
-            // State.OnAMovingPlatform=false;
+            _state.OnPlatformController = false;
             _platformController = null;
-            // _movingPlatformCurrentGravity=0;
         }
 
         protected static int RaycastNonAlloc(
@@ -569,6 +572,58 @@ namespace DefaultNamespace
         }
 
         /// <summary>
+        /// Enables collisions.
+        /// </summary>
+        public virtual void EnableCollisions()
+        {
+            _collisionsDisabled = false;
+        }
+
+        /// <summary>
+        /// Disables collisions.
+        /// </summary>
+        public virtual void DisableCollisions()
+        {
+            _collisionsDisabled = true;
+        }
+
+		/// <summary>
+		/// Disable collisions for the specified duration.
+		/// </summary>
+		/// <param name="duration">The duration for which the collisions must be disabled for.</param>
+        public virtual IEnumerator DisableCollisions(float duration)
+        {
+            DisableCollisions();
+            yield return new WaitForSeconds(duration);
+            EnableCollisions();
+        }
+
+        /// <summary>
+        /// Ignores collisions with the provided <see cref="Collider2D"/>.
+        /// </summary>
+        /// <param name="collider">The <see cref="Collider2D"/> to ignore.</param>
+        public virtual void IgnoreCollider(Collider2D collider)
+        {
+            _ignoredCollider = collider;
+        }
+
+        /// <summary>
+        /// Ignores collisions with the provided <see cref="Collider2D"/> for the specified duration.
+        /// </summary>
+        /// <param name="collider">The <see cref="Collider2D"/> to ignore.</param>
+        /// <param name="duration">The duration for which the collisions with the provided <see cref="Collider2D"/>
+        /// must be ignored for.</param>
+        /// <returns></returns>
+        public virtual IEnumerator IgnoreCollider(Collider2D collider, float duration)
+        {
+            if (!collider) yield break;
+
+            _ignoredCollider = collider;
+            yield return new WaitForSeconds(duration);
+            _ignoredCollider = null;
+        }
+
+        /// <summary>
         /// If the controller is standing on a platform controller, we match its speed.
         /// </summary>
         protected virtual void HandlePlatform()
@@ -590,8 +645,7 @@ namespace DefaultNamespace
                 return;
             }
 
-            // State.OnAMovingPlatform = true;
-
+            _state.OnPlatformController = true;
             SetGravityActive(false);
 
             // _movingPlatformCurrentGravity = _movingPlatformsGravity;
@@ -605,6 +659,8 @@ namespace DefaultNamespace
 
         protected virtual void HandleCollisionsToTheSide()
         {
+            if (_collisionsDisabled) return;
+
             var isGoingRight = _movementDirection > 0f;
             var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
             var movementDirection = isGoingRight ? MovementDirection.Right : MovementDirection.Left;
@@ -673,6 +729,7 @@ namespace DefaultNamespace
         protected virtual void HandleCollisionsBelow()
         {
             _state.IsFalling = _deltaMovement.y < -kSmallFloatValue;
+            if (_collisionsDisabled) return;
             if (Physics2D.gravity.y > 0f && !_state.IsFalling)
             {
                 _state.IsCollidingBelow = true;
@@ -702,7 +759,7 @@ namespace DefaultNamespace
                 for (var x = 0; x < raycastHitCount; x++)
                 {
                     var raycastHit = _belowHitsBuffer[x];
-                    if (raycastHit.distance >= smallestHitDistance)
+                    if (_ignoredCollider == raycastHit.collider || raycastHit.distance >= smallestHitDistance)
                     {
                         continue;
                     }
@@ -749,7 +806,7 @@ namespace DefaultNamespace
             //
             if (StandingOn && StandingOn.transform.TryGetComponent<PlatformController>(out var platform))
             {
-                DetachFromPlatform();
+                if (_platformController != platform) DetachFromPlatform();
                 _platformController = platform;
             }
             else
@@ -760,6 +817,8 @@ namespace DefaultNamespace
 
         protected virtual void HandleCollisionsAbove()
         {
+            if (_collisionsDisabled) return;
+
             var rayDistance = _state.IsGrounded ? skinWidth : Mathf.Abs(_deltaMovement.y); // + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
@@ -901,6 +960,14 @@ namespace DefaultNamespace
             /// </summary>
             public bool JustStartedFalling => IsFalling && !WasFallingLastFrame;
 
+            /// <summary>
+            /// Is the controller currently standing on a <see cref="PlatformController"/>.
+            /// </summary>
+            public bool OnPlatformController { get; set; }
+
+            /// <summary>
+            /// Reset all collision states.
+            /// </summary>
             public void Reset()
             {
                 WasGroundedLastFrame = IsGrounded;

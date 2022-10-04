@@ -53,8 +53,13 @@ namespace DefaultNamespace
             {
                 _jumpedAt = Time.time;
                 JumpEnabled = false;
+                if (_controller.State.OnPlatformController)
+                {
+                    StartCoroutine(_controller.IgnoreCollider(_controller.StandingOnCollider, 0.05f));
+                    _controller.DetachFromPlatform();
+                }
+
                 _controller.SetVerticalForce(Mathf.Sqrt(2f * 2f * Mathf.Abs(_controller.Gravity)));
-                _controller.DetachFromPlatform();
             }
         }
 
