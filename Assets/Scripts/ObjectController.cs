@@ -602,7 +602,7 @@ namespace DefaultNamespace
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
-            if (_movingPlatform) rayDistance *= 2f;
+            if (_movingPlatform) rayDistance *= 3f;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
@@ -680,32 +680,34 @@ namespace DefaultNamespace
 
         protected virtual void HandleMovingPlatform()
         {
-            if (!_movingPlatform || !_movingPlatform.enabled) return;
-            if (!float.IsNaN(_movingPlatform.CurrentSpeed.x) && !float.IsNaN(_movingPlatform.CurrentSpeed.y))
+            if (!_movingPlatform) return;
             {
-                var delta = _movingPlatform.CurrentSpeed;
-                delta *= Time.deltaTime;
-                _transform.Translate(delta);
+                if (!float.IsNaN(_movingPlatform.CurrentSpeed.x) && !float.IsNaN(_movingPlatform.CurrentSpeed.y))
+                {
+                    _transform.Translate(_movingPlatform.CurrentSpeed * Time.deltaTime);
+                }
+
+                if (Time.timeScale == 0 ||
+                    float.IsNaN(_movingPlatform.CurrentSpeed.x) || float.IsNaN(_movingPlatform.CurrentSpeed.y) ||
+                    Time.deltaTime <= 0f ||
+                    _state.WasCeilingedLastFrame)
+                {
+                    return;
+                }
+
+                // State.OnAMovingPlatform = true;
+
+                SetGravityActive(false);
+
+                // _movingPlatformCurrentGravity = _movingPlatformsGravity;
+
+                _deltaMovement.y = _movingPlatform.CurrentSpeed.y * Time.deltaTime;
+
+                // _speed = -_deltaMovement / Time.deltaTime;
+                // _speed.x = -_speed.x;
+
+                UpdateRaycastOrigins();
             }
-
-            if (Time.timeScale == 0f ||
-                float.IsNaN(_movingPlatform.CurrentSpeed.x) || float.IsNaN(_movingPlatform.CurrentSpeed.y) ||
-                _state.WasCeilingedLastFrame)
-            {
-                return;
-            }
-
-            // State.OnAMovingPlatform = true;
-
-            SetGravityActive(false);
-
-            // _movingPlatformCurrentGravity = _movingPlatformsGravity;
-
-            _deltaMovement.y = _movingPlatform.CurrentSpeed.y * Time.deltaTime;
-
-            _speed = -_deltaMovement / Time.deltaTime;
-
-            UpdateRaycastOrigins();
         }
 
         public virtual void DetachFromMovingPlatform()

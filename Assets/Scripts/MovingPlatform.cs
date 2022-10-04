@@ -1,6 +1,4 @@
-﻿using System;
-using MoreMountains.Tools;
-using UnityEngine;
+﻿using MoreMountains.Tools;
 
 namespace DefaultNamespace
 {
