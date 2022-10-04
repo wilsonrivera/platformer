@@ -41,8 +41,8 @@ namespace DefaultNamespace
         protected Vector2 _speed;
         protected Vector2 _externalForce;
         protected Vector2 _deltaMovement;
-        protected float _movementDirection;
-        protected float _storedMovementDirection;
+        protected MovementDirection _movementDirection = MovementDirection.Right;
+        protected MovementDirection _storedMovementDirection;
 
         protected bool _colliderResized;
         protected Vector2 _originalColliderSize;
@@ -146,7 +146,7 @@ namespace DefaultNamespace
             UpdateGravity();
             OnFrameEnter();
             UpdateRaycastOrigins();
-            HandleMovingPlatform();
+            HandlePlatform();
 
             ForcesApplied = _speed;
 
@@ -384,6 +384,22 @@ namespace DefaultNamespace
         }
 
         /// <summary>
+        /// Disconnects the controller from the current platform controller.
+        /// </summary>
+        public virtual void DetachFromPlatform()
+        {
+            if (!_platformController)
+            {
+                return;
+            }
+
+            SetGravityActive(true);
+            // State.OnAMovingPlatform=false;
+            _platformController = null;
+            // _movingPlatformCurrentGravity=0;
+        }
+
+        /// <summary>
         /// This should be called anytime you have to modify the <see cref="BoxCollider2D"/> at runtime. It
         /// will recalculate the distance between the rays used for collision detection.
         /// </summary>
@@ -482,21 +498,38 @@ namespace DefaultNamespace
         protected virtual void DetermineMovementDirection()
         {
             _movementDirection = _storedMovementDirection;
-            if (_speed.x < -kMovementDirectionThreshold)
+            switch (_speed.x)
             {
-                _movementDirection = -1;
+                case < -kMovementDirectionThreshold:
+                    _movementDirection = MovementDirection.Left;
+                    break;
+                case > kMovementDirectionThreshold:
+                    _movementDirection = MovementDirection.Right;
+                    break;
+                default:
+                {
+                    _movementDirection = _externalForce.x switch
+                    {
+                        < -kMovementDirectionThreshold => MovementDirection.Left,
+                        > kMovementDirectionThreshold  => MovementDirection.Right,
+                        _                              => _movementDirection
+                    };
+
+                    break;
+                }
             }
-            else if (_speed.x > kMovementDirectionThreshold)
+
+            if (_platformController)
             {
-                _movementDirection = 1;
-            }
-            else if (_externalForce.x < -kMovementDirectionThreshold)
-            {
-                _movementDirection = -1;
-            }
-            else if (_externalForce.x > kMovementDirectionThreshold)
-            {
-                _movementDirection = 1;
+                if (Mathf.Abs(_platformController.CurrentSpeed.x) > Mathf.Abs(_speed.x))
+                {
+                    _movementDirection = Mathf.Sign(_platformController.CurrentSpeed.x) switch
+                    {
+                        < -kMovementDirectionThreshold => MovementDirection.Left,
+                        > kMovementDirectionThreshold  => MovementDirection.Right,
+                        _                              => _movementDirection
+                    };
+                }
             }
 
             _storedMovementDirection = _movementDirection;
@@ -523,10 +556,47 @@ namespace DefaultNamespace
             return !hit ? destination : Position;
         }
 
+        /// <summary>
+        /// If the controller is standing on a platform controller, we match its speed.
+        /// </summary>
+        protected virtual void HandlePlatform()
+        {
+            if (!_platformController) return;
+            {
+                if (!float.IsNaN(_platformController.CurrentSpeed.x) &&
+                    !float.IsNaN(_platformController.CurrentSpeed.y))
+                {
+                    _transform.Translate(_platformController.CurrentSpeed * Time.deltaTime);
+                }
+
+                if (Time.timeScale == 0 ||
+                    float.IsNaN(_platformController.CurrentSpeed.x) ||
+                    float.IsNaN(_platformController.CurrentSpeed.y) ||
+                    Time.deltaTime <= 0f ||
+                    _state.WasCeilingedLastFrame)
+                {
+                    return;
+                }
+
+                // State.OnAMovingPlatform = true;
+
+                SetGravityActive(false);
+
+                // _movingPlatformCurrentGravity = _movingPlatformsGravity;
+
+                _deltaMovement.y = _platformController.CurrentSpeed.y * Time.deltaTime;
+                _speed = -_deltaMovement / Time.deltaTime;
+                _speed.x = -_speed.x;
+
+                UpdateRaycastOrigins();
+            }
+        }
+
         protected virtual void HandleCollisionsToTheSide()
         {
             var isGoingRight = _movementDirection > 0f;
             var rayDirection = isGoingRight ? Vector2.right : Vector2.left;
+            var movementDirection = isGoingRight ? MovementDirection.Right : MovementDirection.Left;
             var rayDistance = Mathf.Abs(_deltaMovement.x) + skinWidth;
             var initialRayOrigin = isGoingRight ? _raycastOrigins.BottomRight : _raycastOrigins.BottomLeft;
             var smallestHitDistance = float.MaxValue;
@@ -574,7 +644,7 @@ namespace DefaultNamespace
                 }
             }
 
-            if (!closestRaycastHit || new Vector2(_movementDirection, 0f) != rayDirection)
+            if (!closestRaycastHit || _movementDirection == movementDirection)
             {
                 return;
             }
@@ -644,7 +714,7 @@ namespace DefaultNamespace
 
             if (!closestRaycastHit)
             {
-                DetachFromMovingPlatform();
+                DetachFromPlatform();
                 return;
             }
 
@@ -671,57 +741,13 @@ namespace DefaultNamespace
             //
             if (StandingOn && StandingOn.transform.TryGetComponent<PlatformController>(out var platform))
             {
-                DetachFromMovingPlatform();
+                DetachFromPlatform();
                 _platformController = platform;
             }
             else
             {
-                DetachFromMovingPlatform();
+                DetachFromPlatform();
             }
-        }
-
-        protected virtual void HandleMovingPlatform()
-        {
-            if (!_platformController) return;
-            {
-                if (!float.IsNaN(_platformController.CurrentSpeed.x) && !float.IsNaN(_platformController.CurrentSpeed.y))
-                {
-                    _transform.Translate(_platformController.CurrentSpeed * Time.deltaTime);
-                }
-
-                if (Time.timeScale == 0 ||
-                    float.IsNaN(_platformController.CurrentSpeed.x) || float.IsNaN(_platformController.CurrentSpeed.y) ||
-                    Time.deltaTime <= 0f ||
-                    _state.WasCeilingedLastFrame)
-                {
-                    return;
-                }
-
-                // State.OnAMovingPlatform = true;
-
-                SetGravityActive(false);
-
-                // _movingPlatformCurrentGravity = _movingPlatformsGravity;
-
-                _deltaMovement.y = _platformController.CurrentSpeed.y * Time.deltaTime;
-                _speed = -_deltaMovement / Time.deltaTime;
-                // _speed.x = -_speed.x;
-
-                UpdateRaycastOrigins();
-            }
-        }
-
-        public virtual void DetachFromMovingPlatform()
-        {
-            if (!_platformController)
-            {
-                return;
-            }
-
-            SetGravityActive(true);
-            // State.OnAMovingPlatform=false;
-            _platformController = null;
-            // _movingPlatformCurrentGravity=0;
         }
 
         protected virtual void HandleCollisionsAbove()
@@ -789,7 +815,15 @@ namespace DefaultNamespace
 
         }
 
-        [Serializable] public struct ObjectControllerState
+        protected enum MovementDirection : byte
+        {
+
+            Left,
+            Right
+
+        }
+
+        public struct ObjectControllerState
         {
 
             /// <summary>
