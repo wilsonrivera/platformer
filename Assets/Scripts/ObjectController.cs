@@ -4,6 +4,7 @@ using UnityEngine;
 namespace DefaultNamespace
 {
 
+    [DefaultExecutionOrder(100)]
     [RequireComponent(typeof(BoxCollider2D))]
     public class ObjectController : MonoBehaviour
     {
@@ -47,7 +48,7 @@ namespace DefaultNamespace
         protected Vector2 _originalColliderSize;
         protected Vector2 _originalColliderOffset;
 
-        protected MovingPlatform _movingPlatform;
+        protected PlatformController _platformController;
 
         private RaycastOriginsInfo _raycastOrigins;
         private float _verticalDistanceBetweenRays;
@@ -116,6 +117,7 @@ namespace DefaultNamespace
         {
             _transform = transform;
             _boxCollider = GetComponent<BoxCollider2D>();
+            // gameObject.AddComponent<LatePhysicsSync>();
 
             if (TryGetComponent<Rigidbody2D>(out var rb))
             {
@@ -602,7 +604,7 @@ namespace DefaultNamespace
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
             var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
-            if (_movingPlatform) rayDistance *= 3f;
+            if (_platformController) rayDistance *= 3f;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
@@ -667,10 +669,10 @@ namespace DefaultNamespace
             if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
 
             //
-            if (StandingOn && StandingOn.transform.TryGetComponent<MovingPlatform>(out var platform))
+            if (StandingOn && StandingOn.transform.TryGetComponent<PlatformController>(out var platform))
             {
                 DetachFromMovingPlatform();
-                _movingPlatform = platform;
+                _platformController = platform;
             }
             else
             {
@@ -680,15 +682,15 @@ namespace DefaultNamespace
 
         protected virtual void HandleMovingPlatform()
         {
-            if (!_movingPlatform) return;
+            if (!_platformController) return;
             {
-                if (!float.IsNaN(_movingPlatform.CurrentSpeed.x) && !float.IsNaN(_movingPlatform.CurrentSpeed.y))
+                if (!float.IsNaN(_platformController.CurrentSpeed.x) && !float.IsNaN(_platformController.CurrentSpeed.y))
                 {
-                    _transform.Translate(_movingPlatform.CurrentSpeed * Time.deltaTime);
+                    _transform.Translate(_platformController.CurrentSpeed * Time.deltaTime);
                 }
 
                 if (Time.timeScale == 0 ||
-                    float.IsNaN(_movingPlatform.CurrentSpeed.x) || float.IsNaN(_movingPlatform.CurrentSpeed.y) ||
+                    float.IsNaN(_platformController.CurrentSpeed.x) || float.IsNaN(_platformController.CurrentSpeed.y) ||
                     Time.deltaTime <= 0f ||
                     _state.WasCeilingedLastFrame)
                 {
@@ -701,9 +703,8 @@ namespace DefaultNamespace
 
                 // _movingPlatformCurrentGravity = _movingPlatformsGravity;
 
-                _deltaMovement.y = _movingPlatform.CurrentSpeed.y * Time.deltaTime;
-
-                // _speed = -_deltaMovement / Time.deltaTime;
+                _deltaMovement.y = _platformController.CurrentSpeed.y * Time.deltaTime;
+                _speed = -_deltaMovement / Time.deltaTime;
                 // _speed.x = -_speed.x;
 
                 UpdateRaycastOrigins();
@@ -712,14 +713,14 @@ namespace DefaultNamespace
 
         public virtual void DetachFromMovingPlatform()
         {
-            if (!_movingPlatform)
+            if (!_platformController)
             {
                 return;
             }
 
             SetGravityActive(true);
             // State.OnAMovingPlatform=false;
-            _movingPlatform = null;
+            _platformController = null;
             // _movingPlatformCurrentGravity=0;
         }
 
@@ -776,6 +777,16 @@ namespace DefaultNamespace
             if (!_state.WasCeilingedLastFrame) _speed = new Vector2(_speed.x, 0f);
 
             SetVerticalForce(0f);
+        }
+
+        private sealed class LatePhysicsSync : MonoBehaviour
+        {
+
+            private void LateUpdate()
+            {
+                Physics2D.SyncTransforms();
+            }
+
         }
 
         [Serializable] public struct ObjectControllerState

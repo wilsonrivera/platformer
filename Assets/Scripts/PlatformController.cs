@@ -3,7 +3,7 @@
 namespace DefaultNamespace
 {
 
-    public class MovingPlatform : MMPathMovement
+    public class PlatformController : MMPathMovement
     {
 
     }
