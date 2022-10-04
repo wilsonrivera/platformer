@@ -47,6 +47,8 @@ namespace DefaultNamespace
         protected Vector2 _originalColliderSize;
         protected Vector2 _originalColliderOffset;
 
+        protected MovingPlatform _movingPlatform;
+
         private RaycastOriginsInfo _raycastOrigins;
         private float _verticalDistanceBetweenRays;
         private float _horizontalDistanceBetweenRays;
@@ -142,6 +144,7 @@ namespace DefaultNamespace
             UpdateGravity();
             OnFrameEnter();
             UpdateRaycastOrigins();
+            HandleMovingPlatform();
 
             ForcesApplied = _speed;
 
@@ -417,6 +420,12 @@ namespace DefaultNamespace
         {
             _deltaMovement = _speed * Time.deltaTime;
             _shouldComputeSpeed = true;
+
+            CurrentWall = null;
+            StandingOnLastFrame = StandingOn;
+            StandingOn = null;
+            StandingOnCollider = null;
+
             _state.Reset();
         }
 
@@ -463,7 +472,6 @@ namespace DefaultNamespace
 
             Debug.DrawRay(Position, _deltaMovement * 3f, Color.green);
             _transform.Translate(_deltaMovement, Space.Self);
-            Physics2D.SyncTransforms();
         }
 
         /// <summary>
@@ -528,8 +536,6 @@ namespace DefaultNamespace
                 rayDistance *= 2f;
             }
 
-            CurrentWall = null;
-
             for (var i = 0; i < numberOfHorizontalRays; i++)
             {
                 var rayOrigin = initialRayOrigin;
@@ -587,19 +593,16 @@ namespace DefaultNamespace
         protected virtual void HandleCollisionsBelow()
         {
             _state.IsFalling = _deltaMovement.y < -kSmallFloatValue;
-
-            StandingOnLastFrame = StandingOn;
-            StandingOn = null;
-            StandingOnCollider = null;
             if (Physics2D.gravity.y > 0f && !_state.IsFalling)
             {
                 _state.IsCollidingBelow = true;
                 return;
             }
 
-            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
+            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
+            if (_movingPlatform) rayDistance *= 2f;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
@@ -639,6 +642,7 @@ namespace DefaultNamespace
 
             if (!closestRaycastHit)
             {
+                DetachFromMovingPlatform();
                 return;
             }
 
@@ -661,11 +665,65 @@ namespace DefaultNamespace
 
             if (!_state.WasGroundedLastFrame && _speed.y > 0f) _deltaMovement.y += _speed.y * Time.deltaTime;
             if (Mathf.Abs(_deltaMovement.y) < kSmallFloatValue) _deltaMovement.y = 0;
+
+            //
+            if (StandingOn && StandingOn.transform.TryGetComponent<MovingPlatform>(out var platform))
+            {
+                DetachFromMovingPlatform();
+                _movingPlatform = platform;
+            }
+            else
+            {
+                DetachFromMovingPlatform();
+            }
+        }
+
+        protected virtual void HandleMovingPlatform()
+        {
+            if (!_movingPlatform || !_movingPlatform.enabled) return;
+            if (!float.IsNaN(_movingPlatform.CurrentSpeed.x) && !float.IsNaN(_movingPlatform.CurrentSpeed.y))
+            {
+                var delta = _movingPlatform.CurrentSpeed;
+                delta *= Time.deltaTime;
+                _transform.Translate(delta);
+            }
+
+            if (Time.timeScale == 0f ||
+                float.IsNaN(_movingPlatform.CurrentSpeed.x) || float.IsNaN(_movingPlatform.CurrentSpeed.y) ||
+                _state.WasCeilingedLastFrame)
+            {
+                return;
+            }
+
+            // State.OnAMovingPlatform = true;
+
+            SetGravityActive(false);
+
+            // _movingPlatformCurrentGravity = _movingPlatformsGravity;
+
+            _deltaMovement.y = _movingPlatform.CurrentSpeed.y * Time.deltaTime;
+
+            _speed = -_deltaMovement / Time.deltaTime;
+
+            UpdateRaycastOrigins();
+        }
+
+        public virtual void DetachFromMovingPlatform()
+        {
+            if (!_movingPlatform)
+            {
+                return;
+            }
+
+            SetGravityActive(true);
+            // State.OnAMovingPlatform=false;
+            _movingPlatform = null;
+            // _movingPlatformCurrentGravity=0;
         }
 
         protected virtual void HandleCollisionsAbove()
         {
-            var rayDistance = _state.IsGrounded ? skinWidth : Mathf.Abs(_deltaMovement.y);// + skinWidth;
+            var rayDistance = _state.IsGrounded ? skinWidth : Mathf.Abs(_deltaMovement.y); // + skinWidth;
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
 
@@ -713,6 +771,7 @@ namespace DefaultNamespace
             _state.IsCollidingAbove = true;
             _deltaMovement.y = closestRaycastHit.distance - skinWidth;
             if (_state.IsGrounded && _deltaMovement.y < 0f) _deltaMovement.y = 0f;
+            if (!_state.WasCeilingedLastFrame) _speed = new Vector2(_speed.x, 0f);
 
             SetVerticalForce(0f);
         }
