@@ -573,35 +573,34 @@ namespace DefaultNamespace
         /// </summary>
         protected virtual void HandlePlatform()
         {
-            if (!_platformController) return;
+            if (!_platformController || !_platformController.enabled) return;
+
+            if (!float.IsNaN(_platformController.CurrentSpeed.x) &&
+                !float.IsNaN(_platformController.CurrentSpeed.y))
             {
-                if (!float.IsNaN(_platformController.CurrentSpeed.x) &&
-                    !float.IsNaN(_platformController.CurrentSpeed.y))
-                {
-                    _transform.Translate(_platformController.CurrentSpeed * Time.deltaTime);
-                }
-
-                if (Time.timeScale == 0 ||
-                    float.IsNaN(_platformController.CurrentSpeed.x) ||
-                    float.IsNaN(_platformController.CurrentSpeed.y) ||
-                    Time.deltaTime <= 0f ||
-                    _state.WasCeilingedLastFrame)
-                {
-                    return;
-                }
-
-                // State.OnAMovingPlatform = true;
-
-                SetGravityActive(false);
-
-                // _movingPlatformCurrentGravity = _movingPlatformsGravity;
-
-                _deltaMovement.y = _platformController.CurrentSpeed.y * Time.deltaTime;
-                _speed = -_deltaMovement / Time.deltaTime;
-                _speed.x = -_speed.x;
-
-                UpdateRaycastOrigins();
+                _transform.Translate(_platformController.CurrentSpeed * Time.deltaTime);
             }
+
+            if (Time.timeScale == 0 ||
+                float.IsNaN(_platformController.CurrentSpeed.x) ||
+                float.IsNaN(_platformController.CurrentSpeed.y) ||
+                Time.deltaTime <= 0f ||
+                _state.WasCeilingedLastFrame)
+            {
+                return;
+            }
+
+            // State.OnAMovingPlatform = true;
+
+            SetGravityActive(false);
+
+            // _movingPlatformCurrentGravity = _movingPlatformsGravity;
+
+            _deltaMovement.y = _platformController.CurrentSpeed.y * Time.deltaTime;
+            _speed = -_deltaMovement / Time.deltaTime;
+            _speed.x = -_speed.x;
+
+            UpdateRaycastOrigins();
         }
 
         protected virtual void HandleCollisionsToTheSide()

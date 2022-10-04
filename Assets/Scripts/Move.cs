@@ -54,6 +54,7 @@ namespace DefaultNamespace
                 _jumpedAt = Time.time;
                 JumpEnabled = false;
                 _controller.SetVerticalForce(Mathf.Sqrt(2f * 2f * Mathf.Abs(_controller.Gravity)));
+                _controller.DetachFromPlatform();
             }
         }
 
