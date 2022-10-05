@@ -121,7 +121,7 @@ namespace DefaultNamespace
         {
             _transform = transform;
             _boxCollider = GetComponent<BoxCollider2D>();
-            // gameObject.AddComponent<LatePhysicsSync>();
+            gameObject.AddComponent<LatePhysicsSync>();
 
             if (TryGetComponent<Rigidbody2D>(out var rb))
             {
@@ -174,6 +174,7 @@ namespace DefaultNamespace
 
         protected virtual void LateUpdate()
         {
+            Physics2D.SyncTransforms();
             TimeAirborne = _state.IsGrounded ? 0f : TimeAirborne + Time.deltaTime;
         }
 
@@ -471,7 +472,7 @@ namespace DefaultNamespace
         /// </summary>
         protected virtual void UpdateGravity()
         {
-            _currentGravity = Gravity * Time.fixedDeltaTime;
+            _currentGravity = Gravity * Time.deltaTime;
             if (IsGravityActive)
             {
                 // Only apply gravity when it is enabled for this controller
@@ -601,24 +602,24 @@ namespace DefaultNamespace
         /// <summary>
         /// Ignores collisions with the provided <see cref="Collider2D"/>.
         /// </summary>
-        /// <param name="collider">The <see cref="Collider2D"/> to ignore.</param>
-        public virtual void IgnoreCollider(Collider2D collider)
+        /// <param name="col">The <see cref="Collider2D"/> to ignore.</param>
+        public virtual void IgnoreCollider(Collider2D col)
         {
-            _ignoredCollider = collider;
+            _ignoredCollider = col;
         }
 
         /// <summary>
         /// Ignores collisions with the provided <see cref="Collider2D"/> for the specified duration.
         /// </summary>
-        /// <param name="collider">The <see cref="Collider2D"/> to ignore.</param>
+        /// <param name="col">The <see cref="Collider2D"/> to ignore.</param>
         /// <param name="duration">The duration for which the collisions with the provided <see cref="Collider2D"/>
         /// must be ignored for.</param>
         /// <returns></returns>
-        public virtual IEnumerator IgnoreCollider(Collider2D collider, float duration)
+        public virtual IEnumerator IgnoreCollider(Collider2D col, float duration)
         {
-            if (!collider) yield break;
+            _ignoredCollider = col;
+            if (!col) yield break;
 
-            _ignoredCollider = collider;
             yield return new WaitForSeconds(duration);
             _ignoredCollider = null;
         }
@@ -647,8 +648,6 @@ namespace DefaultNamespace
 
             _state.OnPlatformController = true;
             SetGravityActive(false);
-
-            // _movingPlatformCurrentGravity = _movingPlatformsGravity;
 
             _deltaMovement.y = _platformController.CurrentSpeed.y * Time.deltaTime;
             _speed = -_deltaMovement / Time.deltaTime;
@@ -738,8 +737,9 @@ namespace DefaultNamespace
 
             var smallestHitDistance = float.MaxValue;
             RaycastHit2D closestRaycastHit = default;
-            var rayDistance = Mathf.Abs(_deltaMovement.y) + skinWidth;
-            if (_platformController) rayDistance *= 3f;
+            var rayDistance = skinWidth;
+            if (_deltaMovement.y < 0f) rayDistance += Mathf.Abs(_deltaMovement.y);
+            if (_state.OnPlatformController) rayDistance *= 3f;
 
             for (var i = 0; i < numberOfVerticalRays; i++)
             {
