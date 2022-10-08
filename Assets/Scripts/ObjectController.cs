@@ -677,7 +677,7 @@ namespace DefaultNamespace
             for (var i = 0; i < numberOfHorizontalRays; i++)
             {
                 var raycastHitCount = RaycastNonAlloc(
-                    initialRayOrigin + (Vector2.up * (_horizontalDistanceBetweenRays * i)),
+                    initialRayOrigin + Vector2.up * (_horizontalDistanceBetweenRays * i),
                     rayDirection,
                     _sideHitsBuffer,
                     rayDistance,

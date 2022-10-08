@@ -4,7 +4,7 @@ using UnityEngine;
 namespace DefaultNamespace
 {
 
-    public class Spring : MonoBehaviour
+    public class BouncePad : MonoBehaviour
     {
 
         [SerializeField] private float jumpBoost = 1f;
